@@ -8,6 +8,7 @@
     "build": "pnpm -r build",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:integration": "sh -c 'set -a; . ./.env.test; set +a; node scripts/assert-test-database.mjs && DATABASE_URL=\"$DATABASE_URL_TEST\" ./node_modules/.bin/vitest run --config vitest.integration.config.ts \"$@\"' --",
     "test:e2e": "playwright test",
     "lint": "pnpm -r lint",
     "db:generate": "pnpm --filter @api-watchdog/database generate",
