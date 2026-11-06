@@ -1,0 +1,16 @@
+FROM node:24-alpine
+WORKDIR /workspace
+RUN corepack enable
+COPY package.json pnpm-lock.yaml* pnpm-workspace.yaml ./
+COPY apps/web/package.json apps/web/package.json
+COPY workers/monitor-worker/package.json workers/monitor-worker/package.json
+COPY workers/scheduler/package.json workers/scheduler/package.json
+COPY packages/database/package.json packages/database/package.json
+COPY packages/queue/package.json packages/queue/package.json
+COPY packages/shared/package.json packages/shared/package.json
+COPY packages/validation/package.json packages/validation/package.json
+RUN pnpm install --ignore-scripts --frozen-lockfile=false
+COPY . .
+RUN pnpm --filter @api-watchdog/database generate
+EXPOSE 3000
+CMD ["pnpm", "--filter", "@api-watchdog/web", "dev"]

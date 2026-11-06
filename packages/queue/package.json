@@ -1,0 +1,12 @@
+{
+  "name": "@api-watchdog/queue",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@api-watchdog/shared": "workspace:*",
+    "bullmq": "^5.66.0",
+    "ioredis": "^5.8.2"
+  }
+}

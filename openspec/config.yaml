@@ -1,0 +1,128 @@
+schema: spec-driven
+project: api-watchdog
+artifact_store: hybrid
+strict_tdd: false
+
+context: |
+  API Watchdog is a pnpm 11 and TypeScript monorepo with a Next.js 16 web app.
+  Scheduler and monitor worker run as separate Node processes.
+  PostgreSQL and Prisma hold persistent data; Redis and BullMQ handle jobs.
+  Shared workspace packages provide database, queue, validation, and common code.
+  The current root Vitest suite covers validation; Playwright covers the web home page.
+  User-provided URLs are not executed yet; future transport requires SSRF protection.
+
+testing:
+  strict_tdd: false
+  reason: >-
+    No explicit workspace-level test command covers every declared workspace member.
+    The root Vitest configuration includes only tests/unit/**/*.test.ts.
+  workspace_test_command: null
+  root_commands:
+    unit: pnpm test
+    e2e: pnpm test:e2e
+    build: pnpm build
+    lint: pnpm lint
+  projects:
+    - path: .
+      stack: pnpm 11, TypeScript 5, Vitest 4, Playwright 1
+      test_command: pnpm test
+      test_scope: tests/unit/**/*.test.ts (currently validation only)
+      unit: Vitest
+      integration: null
+      e2e: Playwright via pnpm test:e2e (requires running web app)
+      coverage_command: null
+      lint_command: pnpm lint (delegates to member lint scripts)
+      typecheck_command: null
+      format_command: null
+    - path: apps/web
+      stack: Next.js 16, React 19, Tailwind CSS 4, TypeScript
+      test_command: null
+      unit: null
+      integration: null
+      e2e: Root Playwright suite tests the home page
+      coverage_command: null
+      lint_command: pnpm --filter @api-watchdog/web lint
+      typecheck_command: pnpm --filter @api-watchdog/web lint
+      format_command: null
+    - path: workers/monitor-worker
+      stack: Node.js, TypeScript, BullMQ
+      test_command: null
+      unit: null
+      integration: null
+      e2e: null
+      coverage_command: null
+      lint_command: pnpm --filter @api-watchdog/monitor-worker lint
+      typecheck_command: pnpm --filter @api-watchdog/monitor-worker lint
+      format_command: null
+    - path: workers/scheduler
+      stack: Node.js, TypeScript
+      test_command: null
+      unit: null
+      integration: null
+      e2e: null
+      coverage_command: null
+      lint_command: pnpm --filter @api-watchdog/scheduler lint
+      typecheck_command: pnpm --filter @api-watchdog/scheduler lint
+      format_command: null
+    - path: packages/database
+      stack: Prisma 6, PostgreSQL, TypeScript
+      test_command: null
+      unit: null
+      integration: null
+      e2e: null
+      coverage_command: null
+      lint_command: null
+      typecheck_command: null
+      format_command: null
+    - path: packages/queue
+      stack: BullMQ, ioredis, TypeScript
+      test_command: null
+      unit: null
+      integration: null
+      e2e: null
+      coverage_command: null
+      lint_command: null
+      typecheck_command: null
+      format_command: null
+    - path: packages/shared
+      stack: TypeScript
+      test_command: null
+      unit: null
+      integration: null
+      e2e: null
+      coverage_command: null
+      lint_command: null
+      typecheck_command: null
+      format_command: null
+    - path: packages/validation
+      stack: Zod 4, TypeScript
+      test_command: null
+      unit: Root Vitest suite tests validation
+      integration: null
+      e2e: null
+      coverage_command: null
+      lint_command: null
+      typecheck_command: null
+      format_command: null
+
+rules:
+  proposal:
+    - State the intended outcome and scope; include rollback for risky changes.
+  specs:
+    - Use RFC 2119 requirement keywords and Given/When/Then scenarios.
+  design:
+    - Explain cross-process behavior and security boundaries when relevant.
+  tasks:
+    - Group work into verifiable, session-sized units.
+  apply:
+    guidelines:
+      - Follow existing monorepo package boundaries.
+      - Protect outbound requests against SSRF before monitor execution is added.
+    tdd: false
+    test_command: ""
+  verify:
+    test_command: ""
+    build_command: pnpm build
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive specification deltas.

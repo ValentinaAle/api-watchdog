@@ -1,0 +1,14 @@
+node_modules
+.next
+dist
+coverage
+playwright-report
+test-results
+.git
+.pnpm-store
+.DS_Store
+.atl
+.codex
+.engram
+.env*
+!.env.example

@@ -1,0 +1,24 @@
+{
+  "name": "api-watchdog",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "dev": "pnpm --filter @api-watchdog/web dev",
+    "build": "pnpm -r build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "lint": "pnpm -r lint",
+    "db:generate": "pnpm --filter @api-watchdog/database generate",
+    "db:migrate": "pnpm --filter @api-watchdog/database migrate"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.57.0",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.16"
+  }
+}

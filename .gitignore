@@ -1,0 +1,18 @@
+node_modules
+.pnpm-store
+.DS_Store
+.next
+dist
+*.tsbuildinfo
+coverage
+playwright-report
+test-results
+# Local environment files; keep only the sanitized template under version control.
+.env*
+!.env.example
+
+# Machine-specific agent and memory state.
+.atl/
+.codex/
+.engram/
+packages/database/prisma/*.db

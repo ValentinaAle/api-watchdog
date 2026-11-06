@@ -1,0 +1,25 @@
+{
+  "name": "@api-watchdog/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 0.0.0.0",
+    "build": "next build",
+    "start": "next start",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@api-watchdog/database": "workspace:*",
+    "@api-watchdog/queue": "workspace:*",
+    "@api-watchdog/validation": "workspace:*",
+    "next": "^16.1.1",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@tailwindcss/postcss": "^4.1.18",
+    "tailwindcss": "^4.1.18"
+  }
+}
