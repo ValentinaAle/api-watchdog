@@ -20,8 +20,25 @@
 - [x] 3.3 RED DNS admission tests — deterministic injected A/AAAA resolver tests failed before DNS admission was implemented; cover safe public answers, any unsafe/malformed answer, no answers, resolver failures, timeout, query-string independence, and no HTTP fetch.
 - [x] 3.4 Async DNS admission — exported async validation accepts only safe DNS answer sets, requests both families, times out and fails closed, and never uses HTTP.
 - [x] 4.1–4.3 API handlers and API tests — PR A collection APIs are merged; PR B adds project-scoped item GET/PATCH/DELETE, pause/resume actions, full API composition, and the remaining integration coverage. The extraction preserves the previously verified 10 integration cases; no database test was rerun for PR B.
-- [ ] 5.1–5.3 UI and actions
+- [ ] 5.1–5.3 UI list/form/details/actions — PR A now covers the project-scoped list and create/edit form only; detail, pause/resume, and delete confirmation remain in the preserved follow-up slice.
 - [ ] 6.1–6.2 E2E and final proof
+
+## UI PR A Batch
+
+- Scope: project-scoped list, create/edit form, shared UI API helpers/types, and focused helper tests; direct `projectId` route context, using API handlers shipped with prior API work.
+- Mode: Standard (`strict_tdd: false`).
+- Design: mobile-first, dark navy surface/cyan accent/compact technical cards from the retrieved Stitch screens; unsupported telemetry and actions are not included. The full UI notes/spec are preserved with PR B artifacts until the complete route set lands.
+- Routes in PR A: `/projects/[projectId]/monitors`, `/new`, `/[monitorId]/edit`.
+- API semantics: collection GET/POST and item GET/PATCH; PATCH never changes status. No fake monitor data, project chooser/default/creation, target execution, or telemetry added.
+- No seed/project lifecycle convention exists in this checkout. Runtime/E2E requires an existing project plus a working database; none was available, so no fake fixture was added.
+- Rollback boundary: revert PR A routes, `apps/web/components/monitors/monitor-list.tsx`, `monitor-form.tsx`, `types.ts`, the palette update in `apps/web/app/globals.css`, `tests/unit/monitor-ui.test.ts`, and this progress section.
+- Focused proof: `./node_modules/.bin/vitest run tests/unit/monitor-ui.test.ts` — passed (1 file, 2 tests).
+- Full unit suite: `./node_modules/.bin/vitest run` — incomplete; the new UI helper suite passed (2 tests), but the pre-existing validation suites could not load `zod` because dependencies were not installed in this worktree.
+- Web typecheck: `./node_modules/.bin/tsc --noEmit -p apps/web/tsconfig.json` — blocked by absent `next`, workspace package links, and `zod` in available node_modules; no reliable UI type verdict. Offline install was attempted and stopped because `next@16.4.5` is not in the local package store; network install was not attempted.
+- Runtime/e2e proof: not run; no installed Next runtime/dependencies or pre-existing project seed/database fixture was available. Project convention discovery found no seed or project-creation flow, so no fake project/monitor data was added.
+- Diff hygiene: `git diff --cached --check` passed before commit; explicit trailing-whitespace scan of new UI and OpenSpec files found none. No browser/runtime proof is claimed.
+- Slice size: PR A is independently scoped to list/create/edit and helpers; detail/actions/delete confirmation and full UI design/spec notes remain in `/private/tmp/api-watchdog-monitors-ui-pr-b-backup/` for the next slice.
+- Commit: created after staging and reviewing this PR A diff; no push, PR, or merge was performed.
 
 ## Work Unit Evidence
 
@@ -50,7 +67,7 @@ Tasks 1.1–1.3, 2.1–2.2, and 3.1–3.4 are complete. Tasks 4.1–6.2 remain p
 
 ## Commit and Diff
 
-- Commit: none; no stage/commit was requested or performed.
+- PR A commit: recorded in the final task handoff; PR B code/docs remain backed up under `/private/tmp/api-watchdog-monitors-ui-pr-b-backup/`.
 - PR/push/merge: none.
 
 ## Current API Work — PR B item/action slice
