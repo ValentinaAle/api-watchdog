@@ -32,6 +32,10 @@ export function monitorApiPath(projectId: string, monitorId?: string) {
   return monitorId ? `${collection}/${encodeURIComponent(monitorId)}` : collection;
 }
 
+export function monitorActionApiPath(projectId: string, monitorId: string, action: "pause" | "resume") {
+  return `${monitorApiPath(projectId, monitorId)}/${action}`;
+}
+
 export function formatInterval(seconds: number) {
   if (seconds % 3600 === 0) return `${seconds / 3600} hr`;
   if (seconds % 60 === 0) return `${seconds / 60} min`;
