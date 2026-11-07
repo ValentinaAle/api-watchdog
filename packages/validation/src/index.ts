@@ -1,5 +1,17 @@
 import { z } from "zod";
 
+export {
+  monitorCreateSchema,
+  monitorUpdateSchema,
+  normalizeMonitorUrl,
+} from "./monitor.ts";
+export type {
+  MonitorCreateInput,
+  MonitorHttpMethod,
+  MonitorStatus,
+  MonitorUpdateInput,
+} from "./monitor.ts";
+
 const environmentSchema = z.object({
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
