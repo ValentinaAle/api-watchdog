@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isIP } from "node:net";
 
 const httpMethods = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] as const;
 const monitorStatuses = ["active", "paused"] as const;
@@ -37,6 +38,125 @@ function isReservedHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase().replace(/\.$/, "");
   return normalized.split(".").length < 2 ||
     [...reservedHostSuffixes].some((suffix) => normalized === suffix || normalized.endsWith(`.${suffix}`));
+}
+
+type AddressClassification = "public" | "prohibited";
+
+const prohibitedIpv4Ranges: ReadonlyArray<readonly [number, number]> = [
+  [0x00000000, 8], // This network
+  [0x0a000000, 8], // Private use
+  [0x64400000, 10], // Shared address space / CGNAT
+  [0x7f000000, 8], // Loopback
+  [0xa9fe0000, 16], // Link-local, including cloud metadata
+  [0xac100000, 12], // Private use
+  [0xc0000000, 24], // IETF protocol assignments
+  [0xc0000200, 24], // Documentation
+  [0xc01fc400, 24], // AS112 special-use
+  [0xc034c100, 24], // AMT special-use
+  [0xc0586300, 24], // Deprecated 6to4 relay anycast
+  [0xc0a80000, 16], // Private use
+  [0xc0af3000, 24], // AS112 special-use
+  [0xc6120000, 15], // Benchmarking
+  [0xc6336400, 24], // Documentation
+  [0xcb007100, 24], // AS112 special-use
+  [0xe0000000, 4], // Multicast
+  [0xf0000000, 4], // Reserved / broadcast
+];
+
+function ipv4ToNumber(address: string): number | undefined {
+  if (!isCanonicalIpv4(address)) return undefined;
+  return address.split(".").reduce((value, octet) => (value * 256) + Number(octet), 0);
+}
+
+function ipv4InRange(address: number, network: number, prefix: number): boolean {
+  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+  return (address & mask) === (network & mask);
+}
+
+function ipv6ToBigInt(address: string): bigint | undefined {
+  if (isIP(address) !== 6) return undefined;
+  let source = address.toLowerCase();
+  if (source.includes(".")) {
+    const lastColon = source.lastIndexOf(":");
+    const ipv4 = ipv4ToNumber(source.slice(lastColon + 1));
+    if (ipv4 === undefined) return undefined;
+    const high = ((ipv4 >>> 16) & 0xffff).toString(16);
+    const low = (ipv4 & 0xffff).toString(16);
+    source = `${source.slice(0, lastColon)}:${high}:${low}`;
+  }
+
+  const halves = source.split("::");
+  if (halves.length > 2) return undefined;
+  const left = halves[0] ? halves[0].split(":") : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const missing = 8 - left.length - right.length;
+  if ((halves.length === 1 && missing !== 0) || (halves.length === 2 && missing < 1)) return undefined;
+  const groups = [...left, ...Array.from({ length: missing }, () => "0"), ...right];
+  if (groups.length !== 8 || groups.some((group) => !/^[\da-f]{1,4}$/.test(group))) return undefined;
+  return groups.reduce((value, group) => (value << 16n) | BigInt(`0x${group}`), 0n);
+}
+
+function ipv6InRange(address: bigint, network: bigint, prefix: number): boolean {
+  const mask = ((1n << BigInt(prefix)) - 1n) << BigInt(128 - prefix);
+  return (address & mask) === (network & mask);
+}
+
+function ipv6Network(groups: string): bigint {
+  return ipv6ToBigInt(groups) ?? 0n;
+}
+
+/** Classifies an IP without resolving or making any network request. */
+export function classifyMonitorAddress(address: string): AddressClassification {
+  const version = isIP(address);
+  if (version === 4) {
+    const numeric = ipv4ToNumber(address);
+    if (numeric === undefined) return "prohibited";
+    return prohibitedIpv4Ranges.some(([network, prefix]) => ipv4InRange(numeric, network, prefix))
+      ? "prohibited"
+      : "public";
+  }
+  if (version !== 6) return "prohibited";
+
+  const numeric = ipv6ToBigInt(address);
+  if (numeric === undefined) return "prohibited";
+  const globalUnicast = ipv6InRange(numeric, ipv6Network("2000::"), 3);
+  const specialUse =
+    ipv6InRange(numeric, ipv6Network("2001::"), 23) ||
+    ipv6InRange(numeric, ipv6Network("2001:db8::"), 32) ||
+    ipv6InRange(numeric, ipv6Network("2002::"), 16) ||
+    ipv6InRange(numeric, ipv6Network("3fff::"), 20);
+  return globalUnicast && !specialUse ? "public" : "prohibited";
+}
+
+export type MonitorDnsResolver = {
+  resolve4(hostname: string): Promise<readonly string[]>;
+  resolve6(hostname: string): Promise<readonly string[]>;
+};
+
+export type MonitorAdmissionErrorCode = "UNSAFE_TARGET" | "TARGET_UNVERIFIABLE";
+
+export class MonitorTargetAdmissionError extends Error {
+  constructor(readonly code: MonitorAdmissionErrorCode) {
+    super(code === "UNSAFE_TARGET" ? "Monitor target is not permitted" : "Monitor target could not be verified");
+    this.name = "MonitorTargetAdmissionError";
+  }
+}
+
+export type MonitorAdmissionOptions = {
+  resolver: MonitorDnsResolver;
+  timeoutMs?: number;
+};
+
+function isAdmissibleDnsHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/\.$/, "");
+  const specialUseSuffixes = [
+    ".localhost", ".local", ".internal", ".test", ".example", ".invalid", ".onion",
+    ".arpa", ".corp", ".home", ".lan", ".intranet", ".private", ".svc", ".cluster.local",
+  ];
+  return normalized !== "localhost" && normalized !== "metadata.google" &&
+    !normalized.endsWith(".metadata.google") &&
+    !specialUseSuffixes.some((suffix) => normalized.endsWith(suffix)) &&
+    !isReservedHostname(normalized);
 }
 
 /** Parse and normalize an HTTP(S) URL without resolving its hostname or contacting it. */
@@ -94,6 +214,61 @@ const monitorUrlSchema = z.string().transform((value, context) => {
     return z.NEVER;
   }
 });
+
+/** Admission only: this does not fetch a target or authorize a future connection. */
+export async function admitMonitorTarget(
+  value: string,
+  options: MonitorAdmissionOptions,
+): Promise<string> {
+  let normalizedUrl: string;
+  try {
+    normalizedUrl = normalizeMonitorUrl(value);
+  } catch {
+    throw new MonitorTargetAdmissionError("UNSAFE_TARGET");
+  }
+  const parsed = new URL(normalizedUrl);
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, "");
+  if (isIP(hostname) !== 0) {
+    if (classifyMonitorAddress(hostname) !== "public") {
+      throw new MonitorTargetAdmissionError("UNSAFE_TARGET");
+    }
+    return normalizedUrl;
+  }
+  if (!isAdmissibleDnsHostname(hostname)) throw new MonitorTargetAdmissionError("UNSAFE_TARGET");
+
+  const timeoutMs = options.timeoutMs ?? 5_000;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new MonitorTargetAdmissionError("TARGET_UNVERIFIABLE");
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const lookups = Promise.all([
+      Promise.resolve().then(() => options.resolver.resolve4(hostname)),
+      Promise.resolve().then(() => options.resolver.resolve6(hostname)),
+    ]);
+    const answers = await Promise.race([
+      lookups,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error("DNS admission timeout")), timeoutMs);
+      }),
+    ]);
+    const [ipv4Answers, ipv6Answers] = answers;
+    if (!Array.isArray(ipv4Answers) || !Array.isArray(ipv6Answers)) throw new Error("Malformed DNS answer");
+    const allAnswers: unknown[] = [...ipv4Answers, ...ipv6Answers];
+    if (allAnswers.length === 0) throw new Error("No DNS answers");
+    if (allAnswers.some((answer) =>
+      typeof answer !== "string" || classifyMonitorAddress(answer) !== "public",
+    )) {
+      throw new MonitorTargetAdmissionError("UNSAFE_TARGET");
+    }
+    return normalizedUrl;
+  } catch (error) {
+    if (error instanceof MonitorTargetAdmissionError) throw error;
+    throw new MonitorTargetAdmissionError("TARGET_UNVERIFIABLE");
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
 
 const monitorNameSchema = z.string().trim().min(1).max(100);
 const monitorMethodSchema = z.enum(httpMethods);

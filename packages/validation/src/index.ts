@@ -3,9 +3,15 @@ import { z } from "zod";
 export {
   monitorCreateSchema,
   monitorUpdateSchema,
+  classifyMonitorAddress,
+  admitMonitorTarget,
+  MonitorTargetAdmissionError,
   normalizeMonitorUrl,
 } from "./monitor.ts";
 export type {
+  MonitorAdmissionErrorCode,
+  MonitorAdmissionOptions,
+  MonitorDnsResolver,
   MonitorCreateInput,
   MonitorHttpMethod,
   MonitorStatus,

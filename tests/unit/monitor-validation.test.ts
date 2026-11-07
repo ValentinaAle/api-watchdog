@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  admitMonitorTarget,
+  classifyMonitorAddress,
   monitorCreateSchema,
   monitorUpdateSchema,
   normalizeMonitorUrl,
@@ -90,6 +92,111 @@ describe("monitor update schema", () => {
     for (const input of [{}, { status: "paused" }, { projectId: "project-id" }, { headers: {} }]) {
       expect(monitorUpdateSchema.safeParse(input).success).toBe(false);
     }
+  });
+});
+
+describe("monitor destination address policy", () => {
+  it.each([
+    "0.1.2.3", "10.0.0.1", "100.64.0.1", "100.127.255.254",
+    "127.0.0.1", "169.254.1.1", "169.254.169.254", "172.16.0.1",
+    "172.31.255.254", "192.0.0.1", "192.0.2.1", "192.88.99.1",
+    "192.168.1.1", "192.175.48.1", "198.18.0.1", "198.19.255.254", "198.51.100.1",
+    "203.0.113.1", "224.0.0.1", "240.0.0.1", "255.255.255.255",
+    "::", "::1", "::ffff:8.8.8.8", "fc00::1", "fd12:3456::1",
+    "fe80::1", "ff02::1", "2001:db8::1", "2001:2::1", "2001::1",
+    "2002:c000:0201::1", "3fff::1", "64:ff9b::808:808",
+    "not-an-address", "8.8.8", "127.1",
+  ])("prohibits non-public or ambiguous address %s", (address) => {
+    expect(classifyMonitorAddress(address)).toBe("prohibited");
+  });
+
+  it.each(["1.1.1.1", "8.8.8.8", "93.184.216.34", "2606:4700:4700::1111", "2001:4860:4860::8888"])(
+    "permits public unicast address %s",
+    (address) => expect(classifyMonitorAddress(address)).toBe("public"),
+  );
+});
+
+describe("monitor target admission", () => {
+  const resolver = { resolve4: vi.fn(), resolve6: vi.fn() };
+
+  it.each([
+    "https://127.0.0.1/health", "https://169.254.169.254/latest/meta-data/",
+    "https://[::1]/health", "https://[::ffff:8.8.8.8]/health",
+    "https://[2001:db8::1]/health", "https://8.8.8/health",
+    "https://metadata.google/computeMetadata/v1/", "https://service.internal/health",
+  ])("rejects prohibited literal or special-use hostname without DNS: %s", async (url) => {
+    await expect(admitMonitorTarget(url, { resolver })).rejects.toMatchObject({ code: "UNSAFE_TARGET" });
+    expect(resolver.resolve4).not.toHaveBeenCalled();
+    expect(resolver.resolve6).not.toHaveBeenCalled();
+  });
+
+  it.each(["https://1.1.1.1/health", "https://[2606:4700:4700::1111]/health"])(
+    "admits an explicitly public literal without DNS: %s",
+    async (url) => {
+      await expect(admitMonitorTarget(url, { resolver })).resolves.toBe(url);
+      expect(resolver.resolve4).not.toHaveBeenCalled();
+      expect(resolver.resolve6).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe("injected DNS monitor target admission", () => {
+  const publicA = ["8.8.8.8"];
+  const publicAaaa = ["2606:4700:4700::1111"];
+  const url = "https://monitor.example.com/health?token=not-logged";
+
+  function createResolver(resolve4 = publicA, resolve6 = publicAaaa) {
+    return {
+      resolve4: vi.fn(async (_hostname: string) => resolve4),
+      resolve6: vi.fn(async (_hostname: string) => resolve6),
+    };
+  }
+
+  it("resolves both families by hostname and never fetches the target", async () => {
+    const resolver = createResolver();
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    try {
+      await expect(admitMonitorTarget(url, { resolver })).resolves.toBe(url);
+      expect(resolver.resolve4).toHaveBeenCalledExactlyOnceWith("monitor.example.com");
+      expect(resolver.resolve6).toHaveBeenCalledExactlyOnceWith("monitor.example.com");
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each([[publicA, []], [[], publicAaaa]])("accepts one non-empty family with public answers", async (a, aaaa) => {
+    const resolver = createResolver(a as string[], aaaa as string[]);
+    await expect(admitMonitorTarget(url, { resolver })).resolves.toBe(url);
+  });
+
+  it.each([
+    [["8.8.8.8", "10.0.0.1"], publicAaaa],
+    [publicA, ["2606:4700:4700::1111", "fe80::1"]],
+    [["not-an-address"], publicAaaa],
+  ])("rejects the entire set if any DNS answer is unsafe or malformed", async (a, aaaa) => {
+    const resolver = createResolver(a as string[], aaaa as string[]);
+    await expect(admitMonitorTarget(url, { resolver })).rejects.toMatchObject({ code: "UNSAFE_TARGET" });
+  });
+
+  it("rejects empty resolver results", async () => {
+    await expect(admitMonitorTarget(url, { resolver: createResolver([], []) }))
+      .rejects.toMatchObject({ code: "TARGET_UNVERIFIABLE" });
+  });
+
+  it.each(["A", "AAAA"])("fails closed when %s resolution fails", async (family) => {
+    const resolver = createResolver();
+    if (family === "A") resolver.resolve4.mockRejectedValue(new Error("private resolver detail"));
+    else resolver.resolve6.mockRejectedValue(new Error("private resolver detail"));
+    await expect(admitMonitorTarget(url, { resolver })).rejects.toMatchObject({ code: "TARGET_UNVERIFIABLE" });
+  });
+
+  it("fails closed when DNS exceeds the configured timeout", async () => {
+    const resolver = createResolver();
+    resolver.resolve6.mockImplementation(() => new Promise(() => undefined));
+    await expect(admitMonitorTarget(url, { resolver, timeoutMs: 5 }))
+      .rejects.toMatchObject({ code: "TARGET_UNVERIFIABLE" });
   });
 });
 
