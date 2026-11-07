@@ -20,14 +20,14 @@
 - [x] 3.3 RED DNS admission tests — deterministic injected A/AAAA resolver tests failed before DNS admission was implemented; cover safe public answers, any unsafe/malformed answer, no answers, resolver failures, timeout, query-string independence, and no HTTP fetch.
 - [x] 3.4 Async DNS admission — exported async validation accepts only safe DNS answer sets, requests both families, times out and fails closed, and never uses HTTP.
 - [x] 4.1–4.3 API handlers and API tests — PR A collection APIs are merged; PR B adds project-scoped item GET/PATCH/DELETE, pause/resume actions, full API composition, and the remaining integration coverage. The extraction preserves the previously verified 10 integration cases; no database test was rerun for PR B.
-- [ ] 5.1–5.3 UI list/form/details/actions — PR A now covers the project-scoped list and create/edit form only; detail, pause/resume, and delete confirmation remain in the preserved follow-up slice.
+- [x] 5.1–5.3 Project-scoped monitor list, create/edit form, detail, pause/resume, and confirmed hard-delete UI — PR A provides list and form; PR B adds API-backed details/actions/delete confirmation. All operations use route `projectId` and the shipped APIs; no fake data, project chooser/default/creation, execution, or telemetry added.
 - [ ] 6.1–6.2 E2E and final proof
 
 ## UI PR A Batch
 
 - Scope: project-scoped list, create/edit form, shared UI API helpers/types, and focused helper tests; direct `projectId` route context, using API handlers shipped with prior API work.
 - Mode: Standard (`strict_tdd: false`).
-- Design: mobile-first, dark navy surface/cyan accent/compact technical cards from the retrieved Stitch screens; unsupported telemetry and actions are not included. The full UI notes/spec are preserved with PR B artifacts until the complete route set lands.
+- Design: mobile-first, dark navy surface/cyan accent/compact technical cards from the retrieved Stitch screens; unsupported telemetry and actions are not included. Detailed UI design/spec notes are intentionally not part of these progress-only PR slices.
 - Routes in PR A: `/projects/[projectId]/monitors`, `/new`, `/[monitorId]/edit`.
 - API semantics: collection GET/POST and item GET/PATCH; PATCH never changes status. No fake monitor data, project chooser/default/creation, target execution, or telemetry added.
 - No seed/project lifecycle convention exists in this checkout. Runtime/E2E requires an existing project plus a working database; none was available, so no fake fixture was added.
@@ -37,8 +37,19 @@
 - Web typecheck: `./node_modules/.bin/tsc --noEmit -p apps/web/tsconfig.json` — blocked by absent `next`, workspace package links, and `zod` in available node_modules; no reliable UI type verdict. Offline install was attempted and stopped because `next@16.4.5` is not in the local package store; network install was not attempted.
 - Runtime/e2e proof: not run; no installed Next runtime/dependencies or pre-existing project seed/database fixture was available. Project convention discovery found no seed or project-creation flow, so no fake project/monitor data was added.
 - Diff hygiene: `git diff --cached --check` passed before commit; explicit trailing-whitespace scan of new UI and OpenSpec files found none. No browser/runtime proof is claimed.
-- Slice size: PR A is independently scoped to list/create/edit and helpers; detail/actions/delete confirmation and full UI design/spec notes remain in `/private/tmp/api-watchdog-monitors-ui-pr-b-backup/` for the next slice.
+- Slice size: PR A is independently scoped to list/create/edit and helpers; the detail/actions/delete confirmation follow-up remains a separate slice.
 - Commit: created after staging and reviewing this PR A diff; no push, PR, or merge was performed.
+
+## UI PR B Batch
+
+- Scope: project-scoped monitor detail, persisted pause/resume controls, explicit hard-delete confirmation, and focused action-path helper coverage; relies on list/form and API helpers merged by PR A.
+- Routes: `/projects/[projectId]/monitors/[monitorId]`; list, create, and edit routes remain supplied by PR A and are not duplicated here.
+- Data source: item details/status from the real `GET` and action API envelopes; pause/resume use the shipped dedicated POST endpoints. Delete navigates away only after HTTP 204. Failed actions preserve the existing displayed status.
+- UI excludes unsupported health/telemetry/history/incidents/regions, target execution, and mock monitor records.
+- Focused UI helper test: `./node_modules/.bin/vitest run tests/unit/monitor-ui.test.ts` — passed (1 file, 3 tests, including project-scoped pause/resume paths). Per parent instruction, unavailable broader checks were not rerun.
+- Runtime/e2e remains pending because the environment has no installed Next dependencies or project/database fixture. No browser proof is claimed.
+- Diff hygiene: `git diff --cached --check` run before commit.
+- Commit: created locally; no push, PR, or merge performed.
 
 ## Work Unit Evidence
 
@@ -63,11 +74,11 @@
 
 ## Blocker and Next Step
 
-Tasks 1.1–1.3, 2.1–2.2, and 3.1–3.4 are complete. Tasks 4.1–6.2 remain pending; no API, UI, worker, scheduler, queue, HTTP request, commit, or PR work was performed. The future worker contract explicitly requires resolving, validating, and pinning every connection and redirect hop, disabling automatic redirects, preventing DNS rebinding, and treating creation admission as no connection permit.
+Tasks 1.1–3.4 and 5.1–5.3 are complete. API tasks are complete per the prior API work and its recorded verification. UI task 6.1–6.2 remains pending: runtime/e2e checks could not run in the unavailable Next/database environment. PR A is merged as `cfcb068`; PR B is locally committed but not published. No worker, scheduler, queue, or target HTTP request was added. The future worker contract still requires validating and pinning every connection and redirect hop, disabling automatic redirects, preventing DNS rebinding, and treating creation admission as no connection permit.
 
 ## Commit and Diff
 
-- PR A commit: recorded in the final task handoff; PR B code/docs remain backed up under `/private/tmp/api-watchdog-monitors-ui-pr-b-backup/`.
+- PR A merged in `cfcb068`; PR B commit recorded in the final task handoff.
 - PR/push/merge: none.
 
 ## Current API Work — PR B item/action slice
