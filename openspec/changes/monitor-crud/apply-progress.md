@@ -19,7 +19,7 @@
 - [x] 3.2 IPv4/IPv6 allow/deny classification and literal-IP admission — explicit tables reject prohibited/reserved address ranges and malformed values; only public unicast literals are admitted, with generic safe errors.
 - [x] 3.3 RED DNS admission tests — deterministic injected A/AAAA resolver tests failed before DNS admission was implemented; cover safe public answers, any unsafe/malformed answer, no answers, resolver failures, timeout, query-string independence, and no HTTP fetch.
 - [x] 3.4 Async DNS admission — exported async validation accepts only safe DNS answer sets, requests both families, times out and fails closed, and never uses HTTP.
-- [ ] 4.1–4.3 API handlers and API tests (PR A collection slice prepared; item/action APIs and their tests remain for PR B).
+- [x] 4.1–4.3 API handlers and API tests — PR A collection APIs are merged; PR B adds project-scoped item GET/PATCH/DELETE, pause/resume actions, full API composition, and the remaining integration coverage. The extraction preserves the previously verified 10 integration cases; no database test was rerun for PR B.
 - [ ] 5.1–5.3 UI and actions
 - [ ] 6.1–6.2 E2E and final proof
 
@@ -53,13 +53,13 @@ Tasks 1.1–1.3, 2.1–2.2, and 3.1–3.4 are complete. Tasks 4.1–6.2 remain p
 - Commit: none; no stage/commit was requested or performed.
 - PR/push/merge: none.
 
-## Current API Work — PR A collection slice
+## Current API Work — PR B item/action slice
 
-- Prepared PR A as an independently coherent collection-only API slice: shared HTTP contract/dependencies, collection CRUD handlers, project collection route, and collection-focused integration harness/cases.
-- The collection route imports `monitorCollectionHandlers` directly. Item CRUD and pause/resume routes, action handlers, full API composition, and their integration cases are deliberately excluded for PR B.
-- Verification inherited from the complete pre-split candidate: parent-confirmed isolated integration run against the healthy test PostgreSQL at `127.0.0.1:5433` — 2 test files, 10 tests passed; no database test was rerun for this extraction. Post-extraction checks are limited to source/type/diff checks.
-- No commit, push, PR, or merge was performed. The current staging scope is PR A only.
+- PR A collection behavior is present in `origin/main` at `848b9ff`. PR B restores only the item CRUD and pause/resume handlers/routes, final `createMonitorApi`/`monitorApi` composition, collection-route dispatch through the completed composition, and corresponding item/action integration cases from the preserved candidate.
+- Item operations use project-scoped repository access; PATCH remains configuration-only and performs async target admission only when URL changes; status transitions remain on pause/resume; DELETE is hard delete; actions are idempotent. No target HTTP request or scheduling work is introduced.
+- Verification inherited from the complete pre-split candidate: parent-confirmed isolated integration run against the test PostgreSQL — 2 test files, 10 tests passed. The extracted PR B retains those API scenarios, so no database integration test was rerun. Post-extraction checks: `./node_modules/.bin/tsc --noEmit -p apps/web/tsconfig.json` passed; `./node_modules/.bin/tsc --noEmit --target ES2022 --moduleResolution Bundler --module ESNext --strict --skipLibCheck --types node --allowImportingTsExtensions tests/integration/monitor-api-items.test.ts` passed; `git diff --cached --check` passed. `pnpm exec` was unavailable because it tried to install into a linked workspace `node_modules` and the registry was unreachable.
+- No commit, push, PR, or merge was performed. PR B staging is limited to its source/routes/test and this tracked progress file; historical untracked design/spec/task artifacts are excluded.
 
 ## PR B Recovery
 
-The complete pre-split API candidate, including PR-B item/action handlers, routes, full composition, original combined integration tests, and the previous full apply-progress is preserved at `/private/tmp/api-watchdog-monitor-crud-pr-b-recovery`. Restore or selectively extract PR B from that snapshot after PR A is integrated; do not use the PR-A-only tracked progress as the full feature plan.
+The recovery snapshot at `/private/tmp/api-watchdog-monitor-crud-pr-b-recovery` was used to selectively restore the planned PR-B source and test hunks after PR A merged. The snapshot remains available, but no further recovery is pending.
