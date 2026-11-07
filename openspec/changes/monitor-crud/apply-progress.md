@@ -5,7 +5,7 @@
 - Change: `monitor-crud`
 - Assigned scope: Phase 3, tasks 3.1–3.4 (IPv4/IPv6 destination classification and injected asynchronous DNS admission).
 - Mode: Standard (`strict_tdd: false`); observed RED → GREEN was performed as requested for both tasks.
-- Delivery: `stacked-to-main`, PR 3 scope (SSRF destination classification and DNS admission); the apply phase stopped before commit/PR, which are handled separately during authorized PR preparation.
+- Delivery: `stacked-to-main`, PR 3 scope (SSRF destination classification and DNS admission); no commit, PR, push, or merge was performed.
 - Prior apply progress: merged completed tasks 1.1–1.3 and their evidence from Engram observation #13 (`sdd/monitor-crud/apply-progress`).
 
 ## Task Status
@@ -19,7 +19,7 @@
 - [x] 3.2 IPv4/IPv6 allow/deny classification and literal-IP admission — explicit tables reject prohibited/reserved address ranges and malformed values; only public unicast literals are admitted, with generic safe errors.
 - [x] 3.3 RED DNS admission tests — deterministic injected A/AAAA resolver tests failed before DNS admission was implemented; cover safe public answers, any unsafe/malformed answer, no answers, resolver failures, timeout, query-string independence, and no HTTP fetch.
 - [x] 3.4 Async DNS admission — exported async validation accepts only safe DNS answer sets, requests both families, times out and fails closed, and never uses HTTP.
-- [ ] 4.1–4.3 API handlers and API tests
+- [ ] 4.1–4.3 API handlers and API tests (PR A collection slice prepared; item/action APIs and their tests remain for PR B).
 - [ ] 5.1–5.3 UI and actions
 - [ ] 6.1–6.2 E2E and final proof
 
@@ -35,7 +35,7 @@
 | Lint/type check | `pnpm lint` — passed across apps/web, monitor-worker, and scheduler. Direct validation-package check `pnpm exec tsc --noEmit --target ES2022 --moduleResolution Bundler --module ESNext --strict --skipLibCheck --types node packages/validation/src/monitor.ts packages/validation/src/index.ts` — passed. |
 | Build | `pnpm build` — database and worker/scheduler builds completed; Next.js build was blocked by sandbox `Operation not permitted` while Turbopack tried to spawn a process/bind a port to compile `globals.css`; no source error was reported. |
 | Diff hygiene | `git diff --check` — passed. |
-| Authored diff | 351 changed lines (350 additions, 1 deletion) for the complete PR candidate, including code, focused tests, progress, and worker-safety documentation; below the 400-line budget with no compression. |
+| Authored diff | Approximately 370 additions + deletions for this Phase 3 slice, excluding pre-existing Phase 2 work; below the ~400-line heuristic, with no test or documentation compression. |
 | Runtime harness | N/A — validation/admission only; no runtime transport or persistence boundary is added. |
 | Rollback boundary | Revert `packages/validation/src/monitor.ts`, admission/classifier exports in `packages/validation/src/index.ts`, and the SSRF test additions in `tests/unit/monitor-validation.test.ts`; earlier schema/persistence slices remain independently revertible. |
 
@@ -52,3 +52,14 @@ Tasks 1.1–1.3, 2.1–2.2, and 3.1–3.4 are complete. Tasks 4.1–6.2 remain p
 
 - Commit: none; no stage/commit was requested or performed.
 - PR/push/merge: none.
+
+## Current API Work — PR A collection slice
+
+- Prepared PR A as an independently coherent collection-only API slice: shared HTTP contract/dependencies, collection CRUD handlers, project collection route, and collection-focused integration harness/cases.
+- The collection route imports `monitorCollectionHandlers` directly. Item CRUD and pause/resume routes, action handlers, full API composition, and their integration cases are deliberately excluded for PR B.
+- Verification inherited from the complete pre-split candidate: parent-confirmed isolated integration run against the healthy test PostgreSQL at `127.0.0.1:5433` — 2 test files, 10 tests passed; no database test was rerun for this extraction. Post-extraction checks are limited to source/type/diff checks.
+- No commit, push, PR, or merge was performed. The current staging scope is PR A only.
+
+## PR B Recovery
+
+The complete pre-split API candidate, including PR-B item/action handlers, routes, full composition, original combined integration tests, and the previous full apply-progress is preserved at `/private/tmp/api-watchdog-monitor-crud-pr-b-recovery`. Restore or selectively extract PR B from that snapshot after PR A is integrated; do not use the PR-A-only tracked progress as the full feature plan.
