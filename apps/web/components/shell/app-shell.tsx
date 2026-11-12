@@ -1,19 +1,15 @@
 import type { ReactNode } from "react";
+import { projectDashboardPath } from "../../lib/projects/paths";
+import { projectMonitorsPath } from "../monitors/types";
 
 type AppShellProps = {
   children: ReactNode;
   projectId?: string;
 };
 
-function projectDashboardPath(projectId: string) {
-  return `/projects/${encodeURIComponent(projectId)}`;
-}
-
 export function AppShell({ children, projectId }: AppShellProps) {
   const dashboardHref = projectId ? projectDashboardPath(projectId) : "/";
-  const monitorsHref = projectId
-    ? `${projectDashboardPath(projectId)}/monitors`
-    : undefined;
+  const monitorsHref = projectId ? projectMonitorsPath(projectId) : undefined;
 
   return (
     <div className="app-shell">

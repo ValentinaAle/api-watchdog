@@ -39,6 +39,18 @@ body { margin: 0; background: #0f131c; color: #dfe2ee; font-family: Geist, ui-sa
 .app-shell__content h1 { margin: 0; color: #f4f7fb; font-size: clamp(1.9rem, 4vw, 2.35rem); line-height: 1.15; }
 .app-shell__empty-state { max-width: 46rem; margin-top: 1.5rem; padding: 1.25rem 1.5rem; border: 1px solid var(--shell-line); border-radius: .65rem; background: var(--shell-panel); color: var(--shell-muted); line-height: 1.6; }
 
+.dashboard { display: grid; gap: 1.5rem; }
+.dashboard__heading { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 1rem; }
+.dashboard__eyebrow { margin: 0 0 .45rem; color: var(--shell-accent-bright); font-size: .8rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+.dashboard__project { margin: 0; color: var(--shell-muted); overflow-wrap: anywhere; }
+.dashboard__project span { color: #e8edf5; }
+.dashboard__notice { margin: 0; padding: 1rem 1.25rem; border: 1px solid var(--shell-line); border-left: 3px solid var(--shell-accent); border-radius: .5rem; background: var(--shell-panel); color: var(--shell-muted); line-height: 1.55; }
+.dashboard__metrics, .dashboard__sections { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.dashboard__card { min-width: 0; padding: 1.25rem; border: 1px solid var(--shell-line); border-radius: .65rem; background: var(--shell-panel); color: var(--shell-muted); line-height: 1.55; }
+.dashboard__card h2 { margin: 0 0 .75rem; color: #e8edf5; font-size: 1rem; }
+.dashboard__card p { margin: .4rem 0 0; }
+.dashboard__unavailable { color: #f4f7fb; font-size: 1.35rem; font-weight: 700; }
+
 @media (max-width: 767px) {
   .app-shell { grid-template-columns: minmax(0, 1fr); align-content: start; }
   .app-shell__sidebar { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1rem; padding: .75rem 1rem; border-right: 0; border-bottom: 1px solid var(--shell-line); }
@@ -47,4 +59,5 @@ body { margin: 0; background: #0f131c; color: #dfe2ee; font-family: Geist, ui-sa
   .app-shell__nav-unavailable { max-width: 11rem; }
   .app-shell__topbar { min-height: 64px; padding: .9rem 1rem; }
   .app-shell__content { padding: 2rem 1rem; }
+  .dashboard__metrics, .dashboard__sections { grid-template-columns: minmax(0, 1fr); }
 }
