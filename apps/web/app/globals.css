@@ -2,3 +2,49 @@
 
 :root { color-scheme: dark; background: #0f131c; }
 body { margin: 0; background: #0f131c; color: #dfe2ee; font-family: Geist, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+
+.app-shell {
+  --shell-canvas: #171a1f;
+  --shell-sidebar: #101317;
+  --shell-topbar: #1b2027;
+  --shell-panel: #20242b;
+  --shell-accent: #00b8d4;
+  --shell-accent-bright: #00d4e8;
+  --shell-positive: #57d89a;
+  --shell-muted: #aab3c2;
+  --shell-line: #303741;
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  color: #e8edf5;
+  background: var(--shell-canvas);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.app-shell *, .app-shell *::before, .app-shell *::after { box-sizing: border-box; }
+.app-shell__skip-link { position: fixed; z-index: 10; top: 1rem; left: 1rem; transform: translateY(-180%); padding: .75rem 1rem; color: #061317; background: var(--shell-accent-bright); border-radius: .35rem; }
+.app-shell__skip-link:focus { transform: translateY(0); }
+.app-shell a:focus-visible { outline: 3px solid var(--shell-accent-bright); outline-offset: 3px; }
+.app-shell__sidebar { min-width: 0; padding: 1.5rem 1rem; background: var(--shell-sidebar); border-right: 1px solid var(--shell-line); }
+.app-shell__brand { display: inline-flex; align-items: center; min-height: 2.5rem; color: #f4f7fb; font-size: .95rem; font-weight: 750; letter-spacing: .11em; text-decoration: none; }
+.app-shell__nav { display: grid; gap: .5rem; margin-top: 2rem; }
+.app-shell__nav-link, .app-shell__nav-unavailable { display: block; min-width: 0; padding: .75rem .85rem; border-radius: .45rem; font-size: .95rem; line-height: 1.4; }
+.app-shell__nav-link { color: var(--shell-muted); text-decoration: none; }
+.app-shell__nav-link[aria-current="page"] { color: #f4fbfd; background: #15333a; box-shadow: inset 3px 0 var(--shell-accent); }
+.app-shell__nav-unavailable { color: #8e98a7; }
+.app-shell__nav-note { display: block; margin-top: .25rem; font-size: .75rem; }
+.app-shell__workspace { min-width: 0; }
+.app-shell__topbar { min-height: 80px; display: flex; align-items: center; padding: 1.25rem clamp(1.25rem, 4vw, 3rem); background: var(--shell-topbar); border-bottom: 1px solid var(--shell-line); color: var(--shell-muted); }
+.app-shell__content { width: 100%; max-width: 1180px; margin-inline: auto; padding: clamp(2rem, 5vw, 4rem); }
+.app-shell__content h1 { margin: 0; color: #f4f7fb; font-size: clamp(1.9rem, 4vw, 2.35rem); line-height: 1.15; }
+.app-shell__empty-state { max-width: 46rem; margin-top: 1.5rem; padding: 1.25rem 1.5rem; border: 1px solid var(--shell-line); border-radius: .65rem; background: var(--shell-panel); color: var(--shell-muted); line-height: 1.6; }
+
+@media (max-width: 767px) {
+  .app-shell { grid-template-columns: minmax(0, 1fr); align-content: start; }
+  .app-shell__sidebar { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1rem; padding: .75rem 1rem; border-right: 0; border-bottom: 1px solid var(--shell-line); }
+  .app-shell__nav { display: flex; flex-wrap: wrap; gap: .25rem; margin: 0 0 0 auto; }
+  .app-shell__nav-link, .app-shell__nav-unavailable { padding: .6rem .65rem; }
+  .app-shell__nav-unavailable { max-width: 11rem; }
+  .app-shell__topbar { min-height: 64px; padding: .9rem 1rem; }
+  .app-shell__content { padding: 2rem 1rem; }
+}
