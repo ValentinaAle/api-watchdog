@@ -21,13 +21,13 @@ export function AppShell({ children, projectId }: AppShellProps) {
     <ProjectIdProvider projectId={projectId}>
       <div className="app-shell">
       <a className="app-shell__skip-link" href="#main-content">
-        Skip to main content
+        Saltar al contenido principal
       </a>
       <aside className="app-shell__sidebar">
         <a className="app-shell__brand" href={dashboardHref}>
           API WATCHDOG
         </a>
-        <nav className="app-shell__nav" aria-label="Primary navigation">
+        <nav className="app-shell__nav" aria-label="Navegación principal">
           <a
             className="app-shell__nav-link"
             href={dashboardHref}
@@ -37,19 +37,19 @@ export function AppShell({ children, projectId }: AppShellProps) {
           </a>
           {monitorsHref ? (
             <a className="app-shell__nav-link" href={monitorsHref} aria-current={monitorsCurrent ? "page" : undefined}>
-              Monitors
+              Monitores
             </a>
           ) : (
             <span className="app-shell__nav-unavailable" aria-disabled="true">
-              Monitors
-              <span className="app-shell__nav-note">Requires project context</span>
+              Monitores
+              <span className="app-shell__nav-note">Requiere contexto de proyecto</span>
             </span>
           )}
         </nav>
       </aside>
       <div className="app-shell__workspace">
         <header className="app-shell__topbar">
-          {projectId ? "Project dashboard" : "Project context unavailable"}
+          {projectId ? "Dashboard del proyecto" : "Contexto del proyecto no disponible"}
         </header>
         <main className="app-shell__content" id="main-content" tabIndex={-1}>
           {children}

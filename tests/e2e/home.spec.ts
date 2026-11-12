@@ -5,11 +5,11 @@ test("root renders the truthful no-project shell", async ({ page }) => {
 
   await expect(page.getByRole("heading", { name: "Dashboard", level: 1 })).toBeVisible();
   await expect(page.getByRole("heading", { name: "No project context" })).toBeVisible();
-  await expect(page.getByText("Requires project context")).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Primary navigation" })).toBeVisible();
+  await expect(page.getByText("Requiere contexto de proyecto")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Navegación principal" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Dashboard" })).toHaveAttribute("aria-current", "page");
-  await expect(page.getByRole("link", { name: "Monitors" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Monitors" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Monitores" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Monitores" })).toHaveCount(0);
   await expect(page.locator(".app-shell__nav-unavailable")).toHaveAttribute("aria-disabled", "true");
 
   const projectLinks = page.locator('a[href*="/projects/"]');
@@ -21,7 +21,7 @@ test("root renders the truthful no-project shell", async ({ page }) => {
 test("shell supports keyboard skip and navigation with visible focus", async ({ page }) => {
   await page.goto("/");
 
-  const skipLink = page.getByRole("link", { name: "Skip to main content" });
+  const skipLink = page.getByRole("link", { name: "Saltar al contenido principal" });
   await page.keyboard.press("Tab");
   await expect(skipLink).toBeFocused();
   await expect(skipLink).toHaveCSS("outline-style", "solid");
@@ -45,7 +45,7 @@ for (const width of [1440, 768, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto("/");
 
-    await expect(page.getByRole("navigation", { name: "Primary navigation" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Navegación principal" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "No project context" })).toBeVisible();
     const dimensions = await page.evaluate(() => ({
       documentWidth: document.documentElement.scrollWidth,
@@ -54,3 +54,16 @@ for (const width of [1440, 768, 390]) {
     expect(dimensions.documentWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
   });
 }
+
+test("renders a deterministic Spanish document language and skip link without hydration errors", async ({ page }) => {
+  const hydrationErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error" && /hydration/i.test(message.text())) hydrationErrors.push(message.text());
+  });
+
+  await page.goto("/");
+
+  await expect(page.locator("html")).toHaveAttribute("lang", "es");
+  await expect(page.getByRole("link", { name: "Saltar al contenido principal" })).toBeVisible();
+  expect(hydrationErrors).toEqual([]);
+});

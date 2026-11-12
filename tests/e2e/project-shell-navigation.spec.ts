@@ -33,25 +33,25 @@ test("keeps shared chrome and project context across monitor routes", async ({ p
 
   await page.goto("/projects/Alpha");
   await expect(page.getByRole("banner")).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Primary navigation" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Navegación principal" })).toBeVisible();
 
-  await page.getByRole("link", { name: "Monitors" }).click();
+  await page.getByRole("link", { name: "Monitores" }).click();
   await expect(page).toHaveURL("/projects/Alpha/monitors");
   await expect(page.getByRole("banner")).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Primary navigation" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Navegación principal" })).toBeVisible();
 
   await page.getByRole("link", { name: /Create monitor/i }).click();
   await expect(page).toHaveURL("/projects/Alpha/monitors/new");
   await expect(page.getByRole("banner")).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Primary navigation" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Navegación principal" })).toBeVisible();
 
   await page.goto("/projects/Alpha/monitors/monitor-1");
   await expect(page.getByRole("banner")).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Primary navigation" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Navegación principal" })).toBeVisible();
   await page.getByRole("link", { name: "Edit" }).click();
   await expect(page).toHaveURL("/projects/Alpha/monitors/monitor-1/edit");
   await expect(page.getByRole("banner")).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Primary navigation" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Navegación principal" })).toBeVisible();
 });
 
 for (const projectId of ["Alpha", "Alpha & Beta", "Alpha/Beta", "Alpha & Beta/2026", "Alpha 100%"]) {
@@ -63,7 +63,7 @@ for (const projectId of ["Alpha", "Alpha & Beta", "Alpha/Beta", "Alpha & Beta/20
 
     await expect(page.getByRole("link", { name: "Dashboard" }))
       .toHaveAttribute("href", `/projects/${encodedProjectId}`);
-    await expect(page.getByRole("link", { name: "Monitors" }))
+    await expect(page.getByRole("link", { name: "Monitores" }))
       .toHaveAttribute("href", `/projects/${encodedProjectId}/monitors`);
     await expect(page.getByRole("link", { name: /Create monitor/i }))
       .toHaveAttribute("href", `/projects/${encodedProjectId}/monitors/new`);
@@ -75,4 +75,11 @@ test("rejects an invalid percent-encoded monitor route safely", async ({ page })
 
   expect(response?.status()).toBe(400);
   await expect(page.getByRole("heading", { name: "400" })).toBeVisible();
+});
+
+test("rejects a double-encoded project placeholder instead of treating it as a project ID", async ({ page }) => {
+  const response = await page.goto("/projects/%257BprojectId%257D/monitors");
+
+  expect(response?.status()).toBe(404);
+  await expect(page.getByRole("heading", { name: "404" })).toBeVisible();
 });
