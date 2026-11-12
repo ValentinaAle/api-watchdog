@@ -17,17 +17,20 @@ describe("monitor UI route and display helpers", () => {
       .toBe("/projects/Alpha%20%26%20Beta%2F2026/monitors");
   });
 
-  it("normalizes the route value once and preserves malformed percent sequences safely", () => {
+  it("normalizes a route value once and rejects malformed or placeholder values", () => {
     expect(normalizeProjectId("Alpha")).toBe("Alpha");
     expect(normalizeProjectId("Alpha%20%26%20Beta")).toBe("Alpha & Beta");
     expect(normalizeProjectId("Alpha%2FBeta")).toBe("Alpha/Beta");
     expect(normalizeProjectId("Alpha%20%26%20Beta%2F2026")).toBe("Alpha & Beta/2026");
     expect(normalizeProjectId("Alpha%20100%25")).toBe("Alpha 100%");
-    expect(normalizeProjectId("Alpha%ZZ")).toBe("Alpha%ZZ");
-    expect(projectMonitorsPath(normalizeProjectId("Alpha%20%26%20Beta%2F2026")))
+    expect(normalizeProjectId("Alpha%ZZ")).toBeUndefined();
+    expect(normalizeProjectId("{projectId}")).toBeUndefined();
+    expect(normalizeProjectId("%7BprojectId%7D")).toBeUndefined();
+    expect(normalizeProjectId("%257BprojectId%257D")).toBeUndefined();
+    const normalizedProjectId = normalizeProjectId("Alpha%20%26%20Beta%2F2026");
+    expect(normalizedProjectId).toBe("Alpha & Beta/2026");
+    expect(projectMonitorsPath(normalizedProjectId!))
       .toBe("/projects/Alpha%20%26%20Beta%2F2026/monitors");
-    expect(projectMonitorsPath(normalizeProjectId("Alpha%ZZ")))
-      .toBe("/projects/Alpha%25ZZ/monitors");
   });
 
   it("formats the configured cadence without implying execution telemetry", () => {

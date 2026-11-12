@@ -1,12 +1,22 @@
 /**
  * Normalizes the URL segment supplied by Next at the project route boundary.
- * Invalid percent sequences remain literal so rendering stays safe and URL
- * builders can encode them once into a canonical path segment.
+ * Invalid percent sequences and template placeholders are rejected by the
+ * route boundary before any URL builders receive an ID.
  */
-export function normalizeProjectId(routeProjectId: string) {
+export function normalizeProjectId(routeProjectId: string): string | undefined {
   try {
-    return decodeURIComponent(routeProjectId);
+    const normalizedProjectId = decodeURIComponent(routeProjectId);
+
+    if (isProjectIdPlaceholder(routeProjectId) || isProjectIdPlaceholder(normalizedProjectId)) {
+      return undefined;
+    }
+
+    return normalizedProjectId;
   } catch {
-    return routeProjectId;
+    return undefined;
   }
+}
+
+function isProjectIdPlaceholder(projectId: string) {
+  return projectId === "{projectId}" || /^%7BprojectId%7D$/i.test(projectId);
 }
