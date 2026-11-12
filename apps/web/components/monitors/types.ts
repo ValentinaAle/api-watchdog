@@ -23,10 +23,6 @@ export async function readApiError(response: Response): Promise<ApiError["error"
   }
 }
 
-export function projectMonitorsPath(projectId: string) {
-  return `/projects/${encodeURIComponent(projectId)}/monitors`;
-}
-
 export function monitorApiPath(projectId: string, monitorId?: string) {
   const collection = `/api/projects/${encodeURIComponent(projectId)}/monitors`;
   return monitorId ? `${collection}/${encodeURIComponent(monitorId)}` : collection;

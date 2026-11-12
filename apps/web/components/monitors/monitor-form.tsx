@@ -2,9 +2,11 @@
 
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { monitorApiPath, projectMonitorsPath, readApiError, type Monitor } from "./types";
+import { projectMonitorPath, projectMonitorsPath } from "../../lib/projects/paths";
+import { useProjectId } from "../projects/project-context";
+import { monitorApiPath, readApiError, type Monitor } from "./types";
 
-type Props = { projectId: string; monitorId?: string };
+type Props = { projectId?: string; monitorId?: string };
 type FormValues = { name: string; url: string; method: Monitor["method"]; intervalSeconds: string; timeoutMs: string; expectedStatus: string; status: Monitor["status"] };
 const initial: FormValues = { name: "", url: "", method: "GET", intervalSeconds: "60", timeoutMs: "5000", expectedStatus: "200", status: "active" };
 const methods: Monitor["method"][] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
@@ -15,7 +17,11 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 
 const inputClass = "mt-2 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-cyan-300 focus:ring-2 focus:ring-cyan-300/20";
 
-export function MonitorForm({ projectId, monitorId }: Props) {
+export function MonitorForm({ projectId: suppliedProjectId, monitorId }: Props) {
+  const contextProjectId = useProjectId();
+  const routeProjectId = suppliedProjectId ?? contextProjectId;
+  if (!routeProjectId) throw new Error("MonitorForm requires project context.");
+  const projectId: string = routeProjectId;
   const router = useRouter();
   const editing = Boolean(monitorId);
   const [values, setValues] = useState<FormValues>(initial);
@@ -74,7 +80,7 @@ export function MonitorForm({ projectId, monitorId }: Props) {
         return;
       }
       const { data } = await response.json() as { data: Monitor };
-      router.push(`${projectMonitorsPath(projectId)}/${encodeURIComponent(data.id)}`);
+      router.push(projectMonitorPath(projectId, data.id));
       router.refresh();
     } catch {
       setError("We could not reach the monitor service. Your changes were not saved.");
@@ -83,8 +89,8 @@ export function MonitorForm({ projectId, monitorId }: Props) {
     }
   }
 
-  return <main className="mx-auto min-h-screen w-full max-w-3xl px-4 pb-16 pt-7 sm:px-8 sm:pt-12">
-    <header className="mb-8 flex items-center gap-4 border-b border-slate-700/70 pb-5"><a aria-label="Back to monitors" className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-slate-700 text-lg text-slate-300 hover:border-cyan-300 hover:text-cyan-200" href={projectMonitorsPath(projectId)}>←</a><div><p className="text-xs font-bold tracking-[0.24em] text-cyan-300">API WATCHDOG</p><p className="mt-1 text-sm text-slate-400">Project monitors</p></div></header>
+  return <div className="mx-auto w-full max-w-3xl px-4 pb-16 pt-7 sm:px-8 sm:pt-12">
+    <header className="mb-8 flex items-center gap-4 border-b border-slate-700/70 pb-5"><a aria-label="Back to monitors" className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-slate-700 text-lg text-slate-300 hover:border-cyan-300 hover:text-cyan-200" href={projectMonitorsPath(projectId)}>←</a><p className="text-sm text-slate-400">Project monitors</p></header>
     <div className="mb-7"><p className="font-mono text-xs uppercase tracking-[0.2em] text-cyan-300">CONFIGURATION</p><h1 className="mt-2 text-3xl font-semibold text-slate-50">{editing ? "Edit monitor" : "Create monitor"}</h1><p className="mt-2 text-sm text-slate-400">Save endpoint settings for this project.</p></div>
     {loading ? <div role="status" className="rounded-xl border border-slate-700 bg-slate-900/70 p-5 text-slate-300">Loading monitor…</div> : null}
     {!loading && error && editing && !values.name ? <div role="alert" className="rounded-xl border border-rose-400/30 bg-rose-950/30 p-5 text-rose-100"><p>{error}</p><a className="mt-4 inline-block text-sm font-semibold underline" href={projectMonitorsPath(projectId)}>Back to monitors</a></div> : null}
@@ -105,5 +111,5 @@ export function MonitorForm({ projectId, monitorId }: Props) {
       {error ? <p role="alert" className="rounded-xl border border-rose-400/30 bg-rose-950/30 p-4 text-sm text-rose-200">{error}</p> : null}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end"><a className="inline-flex min-h-12 items-center justify-center rounded-lg border border-slate-700 px-5 py-3 text-sm font-semibold text-slate-300 hover:bg-slate-800" href={projectMonitorsPath(projectId)}>Cancel</a><button disabled={saving} className="min-h-12 rounded-lg bg-cyan-300 px-6 py-3 text-sm font-bold text-slate-950 hover:bg-cyan-200 disabled:cursor-wait disabled:opacity-60" type="submit">{saving ? "Saving…" : editing ? "Save changes" : "Create monitor"}</button></div>
     </form> : null}
-  </main>;
+  </div>;
 }

@@ -1,6 +1,9 @@
-type DashboardProps = { projectId?: string };
+"use client";
 
-export function Dashboard({ projectId }: DashboardProps) {
+import { useProjectId } from "../projects/project-context";
+
+export function Dashboard() {
+  const projectId = useProjectId();
   if (!projectId) {
     return (
       <>

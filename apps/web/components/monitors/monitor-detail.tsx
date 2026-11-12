@@ -2,9 +2,15 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { formatDate, formatInterval, monitorActionApiPath, monitorApiPath, projectMonitorsPath, readApiError, type Monitor } from "./types";
+import { projectMonitorEditPath, projectMonitorsPath } from "../../lib/projects/paths";
+import { useProjectId } from "../projects/project-context";
+import { formatDate, formatInterval, monitorActionApiPath, monitorApiPath, readApiError, type Monitor } from "./types";
 
-export function MonitorDetail({ projectId, monitorId }: { projectId: string; monitorId: string }) {
+export function MonitorDetail({ projectId: suppliedProjectId, monitorId }: { projectId?: string; monitorId: string }) {
+  const contextProjectId = useProjectId();
+  const routeProjectId = suppliedProjectId ?? contextProjectId;
+  if (!routeProjectId) throw new Error("MonitorDetail requires project context.");
+  const projectId: string = routeProjectId;
   const router = useRouter();
   const [monitor, setMonitor] = useState<Monitor | null>(null);
   const [loading, setLoading] = useState(true);
@@ -81,8 +87,8 @@ export function MonitorDetail({ projectId, monitorId }: { projectId: string; mon
     }
   }
 
-  return <main className="mx-auto min-h-screen w-full max-w-4xl px-4 pb-16 pt-7 sm:px-8 sm:pt-12">
-    <header className="mb-8 flex items-center justify-between gap-4 border-b border-slate-700/70 pb-5"><div className="flex items-center gap-3"><a aria-label="Back to monitors" className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-slate-700 text-lg text-slate-300 hover:border-cyan-300 hover:text-cyan-200" href={base}>←</a><div><p className="text-xs font-bold tracking-[0.24em] text-cyan-300">API WATCHDOG</p><p className="mt-1 text-sm text-slate-400">Monitor details</p></div></div>{monitor ? <a className="rounded-lg border border-slate-700 px-4 py-3 text-sm font-semibold text-slate-200 hover:border-cyan-300 hover:text-cyan-200" href={`${base}/${encodeURIComponent(monitorId)}/edit`}>Edit</a> : null}</header>
+  return <div className="mx-auto w-full max-w-4xl px-4 pb-16 pt-7 sm:px-8 sm:pt-12">
+    <header className="mb-8 flex items-center justify-between gap-4 border-b border-slate-700/70 pb-5"><div className="flex items-center gap-3"><a aria-label="Back to monitors" className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-slate-700 text-lg text-slate-300 hover:border-cyan-300 hover:text-cyan-200" href={base}>←</a><p className="text-sm text-slate-400">Monitor details</p></div>{monitor ? <a className="rounded-lg border border-slate-700 px-4 py-3 text-sm font-semibold text-slate-200 hover:border-cyan-300 hover:text-cyan-200" href={projectMonitorEditPath(projectId, monitorId)}>Edit</a> : null}</header>
     {loading ? <div role="status" className="rounded-xl border border-slate-700 bg-slate-900/70 p-5 text-slate-300">Loading monitor…</div> : null}
     {!loading && error && !monitor ? <section role="alert" className="rounded-2xl border border-slate-700 bg-slate-900/70 p-6"><h1 className="text-xl font-semibold text-slate-50">Monitor unavailable</h1><p className="mt-2 text-sm text-slate-300">{error}</p><div className="mt-5 flex gap-3"><button onClick={() => void load()} className="rounded-lg border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">Try again</button><a className="rounded-lg px-4 py-2 text-sm font-semibold text-cyan-200 hover:bg-cyan-200/10" href={base}>Back to monitors</a></div></section> : null}
     {monitor ? <>
@@ -93,5 +99,5 @@ export function MonitorDetail({ projectId, monitorId }: { projectId: string; mon
       <p className="mt-5 text-xs leading-5 text-slate-500">This page manages saved configuration only. It does not run a check or display monitoring history.</p>
     </> : null}
     {confirmDelete && monitor ? <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="presentation"><section aria-labelledby="delete-title" aria-describedby="delete-description" aria-modal="true" className="w-full max-w-md rounded-2xl border border-rose-300/30 bg-slate-900 p-6 shadow-2xl" role="alertdialog"><p className="font-mono text-xs font-bold uppercase tracking-[0.18em] text-rose-200">Permanent action</p><h2 id="delete-title" className="mt-3 text-xl font-semibold text-slate-50">Delete {monitor.name}?</h2><p id="delete-description" className="mt-3 text-sm leading-6 text-slate-300">This permanently removes this monitor configuration. This action cannot be undone.</p><div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end"><button autoFocus onClick={() => setConfirmDelete(false)} disabled={busy} className="min-h-11 rounded-lg border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">Cancel</button><button onClick={() => void deleteMonitor()} disabled={busy} className="min-h-11 rounded-lg bg-rose-400 px-4 py-2 text-sm font-bold text-slate-950 hover:bg-rose-300 disabled:opacity-60">{busy ? "Deleting…" : "Delete monitor"}</button></div></section></div> : null}
-  </main>;
+  </div>;
 }
