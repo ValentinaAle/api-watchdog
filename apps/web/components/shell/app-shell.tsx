@@ -1,6 +1,9 @@
+"use client";
+
 import type { ReactNode } from "react";
-import { projectDashboardPath } from "../../lib/projects/paths";
-import { projectMonitorsPath } from "../monitors/types";
+import { usePathname } from "next/navigation";
+import { ProjectIdProvider } from "../projects/project-context";
+import { projectDashboardPath, projectMonitorsPath } from "../../lib/projects/paths";
 
 type AppShellProps = {
   children: ReactNode;
@@ -8,11 +11,15 @@ type AppShellProps = {
 };
 
 export function AppShell({ children, projectId }: AppShellProps) {
+  const pathname = usePathname();
   const dashboardHref = projectId ? projectDashboardPath(projectId) : "/";
   const monitorsHref = projectId ? projectMonitorsPath(projectId) : undefined;
+  const dashboardCurrent = pathname === dashboardHref;
+  const monitorsCurrent = Boolean(monitorsHref && (pathname === monitorsHref || pathname.startsWith(`${monitorsHref}/`)));
 
   return (
-    <div className="app-shell">
+    <ProjectIdProvider projectId={projectId}>
+      <div className="app-shell">
       <a className="app-shell__skip-link" href="#main-content">
         Skip to main content
       </a>
@@ -24,12 +31,12 @@ export function AppShell({ children, projectId }: AppShellProps) {
           <a
             className="app-shell__nav-link"
             href={dashboardHref}
-            aria-current="page"
+            aria-current={dashboardCurrent ? "page" : undefined}
           >
             Dashboard
           </a>
           {monitorsHref ? (
-            <a className="app-shell__nav-link" href={monitorsHref}>
+            <a className="app-shell__nav-link" href={monitorsHref} aria-current={monitorsCurrent ? "page" : undefined}>
               Monitors
             </a>
           ) : (
@@ -48,6 +55,7 @@ export function AppShell({ children, projectId }: AppShellProps) {
           {children}
         </main>
       </div>
-    </div>
+      </div>
+    </ProjectIdProvider>
   );
 }

@@ -32,8 +32,8 @@ for (const projectId of ["Alpha", "Beta"]) {
   });
 }
 
-test("encodes project identity as one path segment for both destinations", async ({ page }) => {
-  const projectId = "Alpha & Beta/2026";
+for (const projectId of ["Alpha & Beta", "Alpha/Beta", "Alpha & Beta/2026", "Alpha 100%"]) {
+test(`encodes ${projectId} once for both dashboard destinations`, async ({ page }) => {
   const encodedProjectId = encodeURIComponent(projectId);
   const apiRequests: string[] = [];
   page.on("request", (request) => {
@@ -48,6 +48,14 @@ test("encodes project identity as one path segment for both destinations", async
   await expect(page.getByRole("link", { name: "Monitors" }))
     .toHaveAttribute("href", `/projects/${encodedProjectId}/monitors`);
   expect(apiRequests).toEqual([]);
+});
+}
+
+test("rejects an invalid percent-encoded project segment safely", async ({ page }) => {
+  const response = await page.goto("/projects/Alpha%ZZ");
+
+  expect(response?.status()).toBe(400);
+  await expect(page.getByRole("heading", { name: "400" })).toBeVisible();
 });
 
 for (const width of [1440, 768, 390]) {
