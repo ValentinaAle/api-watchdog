@@ -5,6 +5,7 @@ import {
   monitorCreateSchema,
   monitorUpdateSchema,
   normalizeMonitorUrl,
+  resolveMonitorExecutionTarget,
 } from "../../packages/validation/src/index.ts";
 
 const validMonitor = {
@@ -197,6 +198,85 @@ describe("injected DNS monitor target admission", () => {
     resolver.resolve6.mockImplementation(() => new Promise(() => undefined));
     await expect(admitMonitorTarget(url, { resolver, timeoutMs: 5 }))
       .rejects.toMatchObject({ code: "TARGET_UNVERIFIABLE" });
+  });
+});
+
+describe("execution-time monitor target resolution", () => {
+  const targetUrl = "https://monitor.example.com:8443/health?token=not-logged";
+
+  function createResolver(resolve4: unknown = ["8.8.8.8"], resolve6: unknown = ["2606:4700:4700::1111"]) {
+    return {
+      resolve4: vi.fn(async (_hostname: string) => resolve4 as string[]),
+      resolve6: vi.fn(async (_hostname: string) => resolve6 as string[]),
+    };
+  }
+
+  it("returns immutable normalized metadata only after all A and AAAA answers are public", async () => {
+    const resolver = createResolver();
+
+    const target = await resolveMonitorExecutionTarget(targetUrl, resolver);
+
+    expect(target).toEqual({
+      normalizedUrl: targetUrl,
+      originalHostname: "monitor.example.com",
+      protocol: "https:",
+      port: 8443,
+      addresses: [
+        { address: "8.8.8.8", family: 4 },
+        { address: "2606:4700:4700::1111", family: 6 },
+      ],
+    });
+    expect(Object.isFrozen(target)).toBe(true);
+    expect(Object.isFrozen(target.addresses)).toBe(true);
+    expect(resolver.resolve4).toHaveBeenCalledExactlyOnceWith("monitor.example.com");
+    expect(resolver.resolve6).toHaveBeenCalledExactlyOnceWith("monitor.example.com");
+  });
+
+  it.each([
+    [["8.8.8.8", "10.0.0.1"], ["2606:4700:4700::1111"]],
+    [["8.8.8.8"], ["2606:4700:4700::1111", "fe80::1"]],
+    [["not-an-address"], ["2606:4700:4700::1111"]],
+    ["not-an-array", []],
+    [[], []],
+  ])("fails closed for mixed, malformed, or empty A/AAAA answers", async (a, aaaa) => {
+    await expect(resolveMonitorExecutionTarget(targetUrl, createResolver(a, aaaa)))
+      .rejects.toMatchObject({ code: "TARGET_UNVERIFIABLE" });
+  });
+
+  it("fails closed when either family resolver rejects without exposing target details", async () => {
+    const resolver = createResolver();
+    resolver.resolve6.mockRejectedValue(new Error("https://secret.example/path?token=private 10.0.0.1"));
+
+    const failure = await resolveMonitorExecutionTarget(targetUrl, resolver).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ code: "TARGET_UNVERIFIABLE", message: "Monitor target could not be verified" });
+    expect(String(failure)).not.toContain("secret.example");
+    expect(String(failure)).not.toContain("10.0.0.1");
+  });
+
+  it("uses a public literal IP directly without calling DNS", async () => {
+    const resolver = createResolver();
+
+    await expect(resolveMonitorExecutionTarget("https://1.1.1.1/health", resolver)).resolves.toEqual({
+      normalizedUrl: "https://1.1.1.1/health",
+      originalHostname: "1.1.1.1",
+      protocol: "https:",
+      port: 443,
+      addresses: [{ address: "1.1.1.1", family: 4 }],
+    });
+    expect(resolver.resolve4).not.toHaveBeenCalled();
+    expect(resolver.resolve6).not.toHaveBeenCalled();
+  });
+
+  it("returns a validated public IPv6 literal without DNS", async () => {
+    const resolver = createResolver();
+
+    await expect(resolveMonitorExecutionTarget("https://[2606:4700:4700::1111]/", resolver)).resolves.toMatchObject({
+      originalHostname: "2606:4700:4700::1111",
+      addresses: [{ address: "2606:4700:4700::1111", family: 6 }],
+    });
+    expect(resolver.resolve4).not.toHaveBeenCalled();
+    expect(resolver.resolve6).not.toHaveBeenCalled();
   });
 });
 

@@ -133,6 +133,19 @@ export type MonitorDnsResolver = {
   resolve6(hostname: string): Promise<readonly string[]>;
 };
 
+export type MonitorExecutionAddress = Readonly<{
+  address: string;
+  family: 4 | 6;
+}>;
+
+export type MonitorExecutionTarget = Readonly<{
+  normalizedUrl: string;
+  originalHostname: string;
+  protocol: "http:" | "https:";
+  port: number;
+  addresses: readonly MonitorExecutionAddress[];
+}>;
+
 export type MonitorAdmissionErrorCode = "UNSAFE_TARGET" | "TARGET_UNVERIFIABLE";
 
 export class MonitorTargetAdmissionError extends Error {
@@ -267,6 +280,79 @@ export async function admitMonitorTarget(
     throw new MonitorTargetAdmissionError("TARGET_UNVERIFIABLE");
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+/**
+ * Resolves a monitor target immediately before a future connection.
+ * This only returns immutable, validated address metadata; it never opens a socket.
+ */
+export async function resolveMonitorExecutionTarget(
+  value: string,
+  resolver: MonitorDnsResolver,
+): Promise<MonitorExecutionTarget> {
+  let normalizedUrl: string;
+  try {
+    normalizedUrl = normalizeMonitorUrl(value);
+  } catch {
+    throw new MonitorTargetAdmissionError("UNSAFE_TARGET");
+  }
+
+  const parsed = new URL(normalizedUrl);
+  const originalHostname = parsed.hostname.replace(/^\[|\]$/g, "");
+  const protocol = parsed.protocol as "http:" | "https:";
+  const port = parsed.port === "" ? (protocol === "https:" ? 443 : 80) : Number(parsed.port);
+  if (!Number.isSafeInteger(port) || port <= 0 || port > 65_535) {
+    throw new MonitorTargetAdmissionError("TARGET_UNVERIFIABLE");
+  }
+
+  const literalFamily = isIP(originalHostname);
+  if (literalFamily !== 0) {
+    if (classifyMonitorAddress(originalHostname) !== "public") {
+      throw new MonitorTargetAdmissionError("UNSAFE_TARGET");
+    }
+    return Object.freeze({
+      normalizedUrl,
+      originalHostname,
+      protocol,
+      port,
+      addresses: Object.freeze([Object.freeze({ address: originalHostname, family: literalFamily as 4 | 6 })]),
+    });
+  }
+
+  if (!isAdmissibleDnsHostname(originalHostname)) {
+    throw new MonitorTargetAdmissionError("UNSAFE_TARGET");
+  }
+
+  try {
+    const [ipv4Answers, ipv6Answers] = await Promise.all([
+      Promise.resolve().then(() => resolver.resolve4(originalHostname)),
+      Promise.resolve().then(() => resolver.resolve6(originalHostname)),
+    ]);
+    if (!Array.isArray(ipv4Answers) || !Array.isArray(ipv6Answers)) {
+      throw new Error("Malformed DNS answer");
+    }
+
+    const addresses: MonitorExecutionAddress[] = [
+      ...ipv4Answers.map((address) => ({ address, family: 4 as const })),
+      ...ipv6Answers.map((address) => ({ address, family: 6 as const })),
+    ];
+    if (addresses.length === 0 || addresses.some(({ address, family }) =>
+      typeof address !== "string" || isIP(address) !== family || classifyMonitorAddress(address) !== "public",
+    )) {
+      throw new Error("Unsafe DNS answer");
+    }
+
+    return Object.freeze({
+      normalizedUrl,
+      originalHostname,
+      protocol,
+      port,
+      addresses: Object.freeze(addresses.map((address) => Object.freeze(address))),
+    });
+  } catch (error) {
+    if (error instanceof MonitorTargetAdmissionError) throw error;
+    throw new MonitorTargetAdmissionError("TARGET_UNVERIFIABLE");
   }
 }
 
