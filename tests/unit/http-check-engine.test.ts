@@ -112,4 +112,65 @@ describe("http check engine", () => {
       vi.useRealTimers();
     }
   });
+
+  it("aborts an in-flight resolver and releases it without dispatching transport", async () => {
+    vi.useFakeTimers();
+    try {
+      let activeResolvers = 0;
+      let resolverAborts = 0;
+      const waitForAbort = (signal?: AbortSignal) => new Promise<readonly string[]>((_resolve, reject) => {
+        activeResolvers += 1;
+        signal?.addEventListener("abort", () => {
+          resolverAborts += 1;
+          activeResolvers -= 1;
+          reject(new Error("resolver aborted"));
+        }, { once: true });
+      });
+      const abortAwareResolver = {
+        resolve4: vi.fn((_hostname: string, options?: { signal?: AbortSignal }) => waitForAbort(options?.signal)),
+        resolve6: vi.fn(async () => []),
+      };
+      const testTransport = transport();
+      const run = executeCheck({ ...input, timeoutMs: 1_000 }, { resolver: abortAwareResolver, transport: testTransport });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(run).resolves.toMatchObject({ outcome: "timeout" });
+      expect(resolverAborts).toBe(1);
+      expect(activeResolvers).toBe(0);
+      expect(testTransport.execute).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts an active transport and keeps the timeout after a late completion", async () => {
+    vi.useFakeTimers();
+    try {
+      let activeTransports = 0;
+      let transportAborts = 0;
+      let completeLate!: () => void;
+      const abortAwareTransport = {
+        execute: vi.fn(({ signal }: { signal: AbortSignal }) => new Promise<{ statusCode: number }>((resolve) => {
+          activeTransports += 1;
+          completeLate = () => resolve({ statusCode: 200 });
+          signal.addEventListener("abort", () => {
+            transportAborts += 1;
+            activeTransports -= 1;
+          }, { once: true });
+        })),
+      };
+      const run = executeCheck({ ...input, timeoutMs: 1_000 }, { resolver: resolver(), transport: abortAwareTransport });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(abortAwareTransport.execute).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const timeoutResult = await run;
+      expect(timeoutResult).toMatchObject({ outcome: "timeout" });
+      expect(transportAborts).toBe(1);
+      expect(activeTransports).toBe(0);
+      completeLate();
+      await Promise.resolve();
+      expect(timeoutResult).toMatchObject({ outcome: "timeout" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
