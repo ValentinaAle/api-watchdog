@@ -7,11 +7,14 @@ export {
   admitMonitorTarget,
   MonitorTargetAdmissionError,
   normalizeMonitorUrl,
+  resolveMonitorExecutionTarget,
 } from "./monitor.ts";
 export type {
   MonitorAdmissionErrorCode,
   MonitorAdmissionOptions,
   MonitorDnsResolver,
+  MonitorExecutionAddress,
+  MonitorExecutionTarget,
   MonitorCreateInput,
   MonitorHttpMethod,
   MonitorStatus,
