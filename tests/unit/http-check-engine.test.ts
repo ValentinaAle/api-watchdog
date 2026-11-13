@@ -149,20 +149,31 @@ describe("http check engine", () => {
       let abortListeners = 0;
       let cleanupCalls = 0;
       let transportSettled = false;
+      let abortReceived = false;
+      let internalTransportPromise: Promise<{ statusCode: number }> | undefined;
+      let transportSettlement: Promise<void> | undefined;
       const cooperativeTransport = {
-        execute: vi.fn(({ signal }: { signal: AbortSignal }) => new Promise<{ statusCode: number }>((_resolve, reject) => {
+        execute: vi.fn(({ signal }: { signal: AbortSignal }) => {
+          const pending = new Promise<{ statusCode: number }>((_resolve, reject) => {
           activeTransports += 1;
           const onAbort = () => {
+            abortReceived = true;
             cleanupCalls += 1;
             signal.removeEventListener("abort", onAbort);
             abortListeners -= 1;
             activeTransports -= 1;
-            transportSettled = true;
             reject(new Error("transport aborted"));
           };
           abortListeners += 1;
           signal.addEventListener("abort", onAbort, { once: true });
-        })),
+          });
+          internalTransportPromise = pending;
+          transportSettlement = pending.then(
+            () => { transportSettled = true; },
+            () => { transportSettled = true; },
+          );
+          return pending;
+        }),
       };
       const run = executeCheck({ ...input, timeoutMs: 1_000 }, { resolver: resolver(), transport: cooperativeTransport });
       await vi.advanceTimersByTimeAsync(0);
@@ -170,6 +181,10 @@ describe("http check engine", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       const timeoutResult = await run;
       expect(timeoutResult).toMatchObject({ outcome: "timeout" });
+      expect(abortReceived).toBe(true);
+      expect(internalTransportPromise).toBeDefined();
+      expect(transportSettlement).toBeDefined();
+      await transportSettlement;
       expect(activeTransports).toBe(0);
       expect(abortListeners).toBe(0);
       expect(cleanupCalls).toBe(1);
