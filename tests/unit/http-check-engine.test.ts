@@ -142,32 +142,70 @@ describe("http check engine", () => {
     }
   });
 
-  it("aborts an active transport and keeps the timeout after a late completion", async () => {
+  it("proves an active transport settles when the shared signal aborts", async () => {
     vi.useFakeTimers();
     try {
       let activeTransports = 0;
-      let transportAborts = 0;
-      let completeLate!: () => void;
-      const abortAwareTransport = {
-        execute: vi.fn(({ signal }: { signal: AbortSignal }) => new Promise<{ statusCode: number }>((resolve) => {
+      let abortListeners = 0;
+      let cleanupCalls = 0;
+      let transportSettled = false;
+      const cooperativeTransport = {
+        execute: vi.fn(({ signal }: { signal: AbortSignal }) => new Promise<{ statusCode: number }>((_resolve, reject) => {
           activeTransports += 1;
-          completeLate = () => resolve({ statusCode: 200 });
-          signal.addEventListener("abort", () => {
-            transportAborts += 1;
+          const onAbort = () => {
+            cleanupCalls += 1;
+            signal.removeEventListener("abort", onAbort);
+            abortListeners -= 1;
             activeTransports -= 1;
-          }, { once: true });
+            transportSettled = true;
+            reject(new Error("transport aborted"));
+          };
+          abortListeners += 1;
+          signal.addEventListener("abort", onAbort, { once: true });
         })),
       };
-      const run = executeCheck({ ...input, timeoutMs: 1_000 }, { resolver: resolver(), transport: abortAwareTransport });
+      const run = executeCheck({ ...input, timeoutMs: 1_000 }, { resolver: resolver(), transport: cooperativeTransport });
       await vi.advanceTimersByTimeAsync(0);
-      expect(abortAwareTransport.execute).toHaveBeenCalledTimes(1);
+      expect(cooperativeTransport.execute).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1_000);
       const timeoutResult = await run;
       expect(timeoutResult).toMatchObject({ outcome: "timeout" });
-      expect(transportAborts).toBe(1);
       expect(activeTransports).toBe(0);
+      expect(abortListeners).toBe(0);
+      expect(cleanupCalls).toBe(1);
+      expect(transportSettled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps timeout after a non-cooperative transport completes late", async () => {
+    vi.useFakeTimers();
+    try {
+      let activeTransports = 0;
+      let abortObserved = false;
+      let completeLate!: () => void;
+      const nonCooperativeTransport = {
+        execute: vi.fn(({ signal }: { signal: AbortSignal }) => new Promise<{ statusCode: number }>((resolve) => {
+          activeTransports += 1;
+          completeLate = () => {
+            activeTransports -= 1;
+            resolve({ statusCode: 200 });
+          };
+          signal.addEventListener("abort", () => { abortObserved = true; }, { once: true });
+        })),
+      };
+      const run = executeCheck({ ...input, timeoutMs: 1_000 }, { resolver: resolver(), transport: nonCooperativeTransport });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const timeoutResult = await run;
+      expect(timeoutResult).toMatchObject({ outcome: "timeout" });
+      expect(nonCooperativeTransport.execute).toHaveBeenCalledTimes(1);
+      expect(abortObserved).toBe(true);
+      expect(activeTransports).toBe(1);
       completeLate();
       await Promise.resolve();
+      expect(activeTransports).toBe(0);
       expect(timeoutResult).toMatchObject({ outcome: "timeout" });
     } finally {
       vi.useRealTimers();
