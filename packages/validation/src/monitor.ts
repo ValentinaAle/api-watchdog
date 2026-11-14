@@ -129,8 +129,8 @@ export function classifyMonitorAddress(address: string): AddressClassification {
 }
 
 export type MonitorDnsResolver = {
-  resolve4(hostname: string): Promise<readonly string[]>;
-  resolve6(hostname: string): Promise<readonly string[]>;
+  resolve4(hostname: string, options?: Readonly<{ signal?: AbortSignal }>): Promise<readonly string[]>;
+  resolve6(hostname: string, options?: Readonly<{ signal?: AbortSignal }>): Promise<readonly string[]>;
 };
 
 export type MonitorExecutionAddress = Readonly<{
@@ -290,6 +290,7 @@ export async function admitMonitorTarget(
 export async function resolveMonitorExecutionTarget(
   value: string,
   resolver: MonitorDnsResolver,
+  options: Readonly<{ signal?: AbortSignal }> = {},
 ): Promise<MonitorExecutionTarget> {
   let normalizedUrl: string;
   try {
@@ -324,10 +325,20 @@ export async function resolveMonitorExecutionTarget(
     throw new MonitorTargetAdmissionError("UNSAFE_TARGET");
   }
 
+  if (options.signal?.aborted) {
+    throw new MonitorTargetAdmissionError("TARGET_UNVERIFIABLE");
+  }
+
   try {
+    const resolve4 = options.signal
+      ? resolver.resolve4(originalHostname, options)
+      : resolver.resolve4(originalHostname);
+    const resolve6 = options.signal
+      ? resolver.resolve6(originalHostname, options)
+      : resolver.resolve6(originalHostname);
     const [ipv4Answers, ipv6Answers] = await Promise.all([
-      Promise.resolve().then(() => resolver.resolve4(originalHostname)),
-      Promise.resolve().then(() => resolver.resolve6(originalHostname)),
+      Promise.resolve(resolve4),
+      Promise.resolve(resolve6),
     ]);
     if (!Array.isArray(ipv4Answers) || !Array.isArray(ipv6Answers)) {
       throw new Error("Malformed DNS answer");
