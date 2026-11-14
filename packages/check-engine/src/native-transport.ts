@@ -35,10 +35,13 @@ function createPinnedHttpTransport(requestFactory: HttpRequestFactory): Constrai
         let response: import("node:http").IncomingMessage | undefined;
         let socket: import("node:net").Socket | undefined;
         let settled = false;
+        let responseEnded = false;
+        let socketClosed = false;
         const cleanup = () => {
           request.signal.removeEventListener("abort", onAbort);
           clientRequest?.removeListener("error", onRequestError);
           socket?.removeListener("connect", onConnect);
+          socket?.removeListener("close", onSocketClose);
           response?.removeListener("end", onResponseEnd);
           response?.removeListener("close", onResponseClose);
           response?.removeListener("error", onResponseError);
@@ -69,9 +72,21 @@ function createPinnedHttpTransport(requestFactory: HttpRequestFactory): Constrai
           fail(new CheckTransportError("connection_failure"));
           clientRequest?.destroy();
         };
-        const onResponseEnd = () => settle(() => resolve({ statusCode: response?.statusCode as number }));
+        const succeedAfterDrain = () => {
+          if (responseEnded && socketClosed) {
+            settle(() => resolve({ statusCode: response?.statusCode as number }));
+          }
+        };
+        const onResponseEnd = () => {
+          responseEnded = true;
+          succeedAfterDrain();
+        };
         const onResponseClose = () => {
           if (!response?.complete) fail(new CheckTransportError("connection_failure"));
+        };
+        const onSocketClose = () => {
+          socketClosed = true;
+          succeedAfterDrain();
         };
         const onConnect = () => {
           if (socket?.remoteAddress !== request.address.address) {
@@ -121,6 +136,7 @@ function createPinnedHttpTransport(requestFactory: HttpRequestFactory): Constrai
           clientRequest.once("socket", (nextSocket) => {
             socket = nextSocket;
             socket.once("connect", onConnect);
+            socket.once("close", onSocketClose);
           });
           clientRequest.end();
         } catch (error) {

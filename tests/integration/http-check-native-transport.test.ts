@@ -53,13 +53,24 @@ function controlledTransportFixture(statusCode = 200) {
       response.emit("close");
     },
   });
-  const socket = Object.assign(new EventEmitter(), { remoteAddress: selectedAddress.address });
+  const socket = Object.assign(new EventEmitter(), {
+    remoteAddress: selectedAddress.address,
+    destroyed: false,
+    destroyCalls: 0,
+    destroy() {
+      if (socket.destroyed) return;
+      socket.destroyed = true;
+      socket.destroyCalls += 1;
+      socket.emit("close");
+    },
+  });
   const requestListeners: { callback?: (value: typeof response) => void } = {};
   const clientRequest = Object.assign(new EventEmitter(), {
     socket,
     destroyCalls: 0,
     destroy() {
       clientRequest.destroyCalls += 1;
+      socket.destroy();
     },
     end() {
       queueMicrotask(() => {
@@ -95,7 +106,7 @@ describe("native pinned HTTP transport", () => {
     expect(fixture.requests).toEqual([{ host: `${monitoredHost}:${fixture.port}`, url: "/health?private=value" }]);
   });
 
-  it("waits for response end and releases listeners before resolving success", async () => {
+  it("waits for response end and socket close before resolving success", async () => {
     const controlled = controlledTransportFixture();
     const transport = createNativeHttpTransportForTest(controlled.requestFactory);
     const result = transport.execute(request(8080));
@@ -111,8 +122,15 @@ describe("native pinned HTTP transport", () => {
 
     controlled.response.complete = true;
     controlled.response.emit("end");
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    const socketClosed = once(controlled.socket, "close");
+    controlled.socket.destroy();
+    await socketClosed;
     await expect(result).resolves.toEqual({ statusCode: 200 });
 
+    expect(controlled.socket.destroyed).toBe(true);
     expect(controlled.clientRequest.listenerCount("error")).toBe(0);
     expect(controlled.socket.listenerCount("connect")).toBe(0);
     expect(controlled.response.listenerCount("end")).toBe(0);
@@ -126,11 +144,14 @@ describe("native pinned HTTP transport", () => {
 
     await Promise.resolve();
     await Promise.resolve();
+    const socketClosed = once(controlled.socket, "close");
     controlled.response.emit("error", new Error("fixture response failure"));
 
     await expect(result).rejects.toMatchObject({ outcome: "connection_failure" });
+    await socketClosed;
     expect(controlled.clientRequest.destroyCalls).toBe(1);
     expect(controlled.response.destroyCalls).toBe(1);
+    expect(controlled.socket.destroyed).toBe(true);
     expect(controlled.clientRequest.listenerCount("error")).toBe(0);
     expect(controlled.socket.listenerCount("connect")).toBe(0);
     expect(controlled.response.listenerCount("error")).toBe(0);
@@ -144,10 +165,13 @@ describe("native pinned HTTP transport", () => {
 
     await Promise.resolve();
     await Promise.resolve();
+    const socketClosed = once(controlled.socket, "close");
     controlled.clientRequest.emit("error", new Error("fixture request failure"));
 
     await expect(result).rejects.toMatchObject({ outcome: "connection_failure" });
+    await socketClosed;
     expect(controlled.clientRequest.destroyCalls).toBe(1);
+    expect(controlled.socket.destroyed).toBe(true);
     expect(controlled.clientRequest.listenerCount("error")).toBe(0);
     expect(controlled.socket.listenerCount("connect")).toBe(0);
     expect(controlled.response.listenerCount("end")).toBe(0);
@@ -161,11 +185,14 @@ describe("native pinned HTTP transport", () => {
 
     await Promise.resolve();
     await Promise.resolve();
+    const socketClosed = once(controlled.socket, "close");
     controller.abort();
 
     await expect(result).rejects.toMatchObject({ outcome: "connection_failure" });
+    await socketClosed;
     expect(controlled.clientRequest.destroyCalls).toBe(1);
     expect(controlled.response.destroyCalls).toBe(1);
+    expect(controlled.socket.destroyed).toBe(true);
     expect(controlled.clientRequest.listenerCount("error")).toBe(0);
     expect(controlled.socket.listenerCount("connect")).toBe(0);
     expect(controlled.response.listenerCount("end")).toBe(0);
