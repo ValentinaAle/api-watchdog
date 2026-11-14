@@ -10,3 +10,5 @@ export type {
 } from "./types.ts";
 export { MAX_EXECUTION_TIMEOUT_MS, MAX_RESPONSE_BYTES, CheckTransportError } from "./types.ts";
 export { executeCheck } from "./engine.ts";
+
+export { createNativeHttpTransport } from "./native-transport.ts";
