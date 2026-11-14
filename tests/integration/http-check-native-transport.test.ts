@@ -1,12 +1,89 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
+import { createServer as createHttpsServer, request as nativeHttpsRequest, type Server as HttpsServer } from "node:https";
 import { EventEmitter, once } from "node:events";
+import { execFileSync } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import type { Socket } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createNativeHttpTransport, createNativeHttpTransportForTest } from "../../packages/check-engine/src/native-transport.ts";
 import type { TransportRequest } from "../../packages/check-engine/src/types.ts";
 
 const monitoredHost = "pinned-target.invalid";
+const secureMonitoredHost = "monitor.test";
 const selectedAddress = { address: "127.0.0.1", family: 4 as const };
 let server: Server | undefined;
+let httpsServer: HttpsServer | undefined;
+let certificateDirectory: string | undefined;
+let certificateAuthority: string;
+let certificate: string;
+let privateKey: string;
+
+async function createCertificateFixture() {
+  certificateDirectory = await mkdtemp(join(tmpdir(), "api-watchdog-https-"));
+  const configPath = join(certificateDirectory, "san.cnf");
+  await writeFile(configPath, "subjectAltName=DNS:monitor.test\n");
+  execFileSync("openssl", [
+    "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", join(certificateDirectory, "ca.key"),
+    "-out", join(certificateDirectory, "ca.crt"), "-subj", "/CN=API Watchdog Test CA", "-days", "1",
+  ], { stdio: "ignore" });
+  execFileSync("openssl", [
+    "req", "-newkey", "rsa:2048", "-nodes", "-keyout", join(certificateDirectory, "server.key"),
+    "-out", join(certificateDirectory, "server.csr"), "-subj", "/CN=monitor.test",
+  ], { stdio: "ignore" });
+  execFileSync("openssl", [
+    "x509", "-req", "-in", join(certificateDirectory, "server.csr"), "-CA", join(certificateDirectory, "ca.crt"),
+    "-CAkey", join(certificateDirectory, "ca.key"), "-CAcreateserial", "-out", join(certificateDirectory, "server.crt"),
+    "-days", "1", "-extfile", configPath,
+  ], { stdio: "ignore" });
+  [certificateAuthority, certificate, privateKey] = await Promise.all([
+    readFile(join(certificateDirectory, "ca.crt"), "utf8"),
+    readFile(join(certificateDirectory, "server.crt"), "utf8"),
+    readFile(join(certificateDirectory, "server.key"), "utf8"),
+  ]);
+}
+
+async function startHttpsFixture(statusCode = 200, location?: string) {
+  const requests: Array<{ host?: string; url?: string; servername?: string }> = [];
+  httpsServer = createHttpsServer({ cert: certificate, key: privateKey }, (request, response) => {
+    requests.push({ host: request.headers.host, url: request.url, servername: request.socket.servername });
+    response.writeHead(statusCode, location ? { location } : undefined);
+    response.end("fixture");
+  });
+  httpsServer.listen(0, "127.0.0.1");
+  await once(httpsServer, "listening");
+  const address = httpsServer.address();
+  if (!address || typeof address === "string") throw new Error("HTTPS fixture did not bind to TCP");
+  return { port: address.port, requests };
+}
+
+async function startPendingHttpsFixture() {
+  let markRequestStarted: () => void;
+  const requestStarted = new Promise<void>((resolve) => {
+    markRequestStarted = resolve;
+  });
+  let socketClosed: Promise<unknown> | undefined;
+  httpsServer = createHttpsServer({ cert: certificate, key: privateKey }, (request) => {
+    socketClosed = new Promise((resolve) => {
+      (request.socket as Socket).once("close", resolve);
+    });
+    markRequestStarted();
+  });
+  httpsServer.listen(0, "127.0.0.1");
+  await once(httpsServer, "listening");
+  const address = httpsServer.address();
+  if (!address || typeof address === "string") throw new Error("HTTPS fixture did not bind to TCP");
+  return {
+    port: address.port,
+    requestStarted,
+    async waitForSocketClose() {
+      await requestStarted;
+      if (!socketClosed) throw new Error("HTTPS fixture did not receive a socket");
+      await socketClosed;
+    },
+  };
+}
 
 async function startFixture(statusCode = 200, location?: string) {
   const requests: Array<{ host?: string; url?: string }> = [];
@@ -36,6 +113,19 @@ function request(port: number, signal = new AbortController().signal): Transport
     timeoutMs: 1_000,
     maxResponseBytes: 1_048_576,
     signal,
+  };
+}
+
+function httpsRequest(port: number, hostname = secureMonitoredHost): TransportRequest {
+  return {
+    ...request(port),
+    target: {
+      normalizedUrl: `https://${hostname}:${port}/health?private=value`,
+      originalHostname: hostname,
+      protocol: "https:",
+      port,
+      addresses: [selectedAddress],
+    },
   };
 }
 
@@ -94,6 +184,17 @@ afterEach(async () => {
     await once(server, "close");
     server = undefined;
   }
+  if (httpsServer) {
+    httpsServer.close();
+    await once(httpsServer, "close");
+    httpsServer = undefined;
+  }
+});
+
+beforeAll(createCertificateFixture);
+
+afterAll(async () => {
+  if (certificateDirectory) await rm(certificateDirectory, { recursive: true, force: true });
 });
 
 describe("native pinned HTTP transport", () => {
@@ -242,5 +343,130 @@ describe("native pinned HTTP transport", () => {
     await expect(createNativeHttpTransport().execute(httpsRequest)).rejects.toMatchObject({
       outcome: "tls_or_protocol_failure",
     });
+  });
+
+  it("pins HTTPS to the selected IP while preserving Host, SNI, and TLS hostname validation", async () => {
+    const fixture = await startHttpsFixture();
+    const observed: {
+      lookupCalls: number;
+      hostname?: string;
+      servername?: string;
+      agent?: unknown;
+      family?: number;
+      autoSelectFamily?: boolean;
+      certificateAuthority?: unknown;
+      rejectUnauthorized?: unknown;
+    } = {
+      lookupCalls: 0,
+    };
+    const httpsFactory = ((options: Parameters<typeof nativeHttpsRequest>[0], callback: Parameters<typeof nativeHttpsRequest>[1]) => {
+      observed.hostname = options.hostname;
+      observed.servername = options.servername;
+      observed.agent = options.agent;
+      observed.family = options.family;
+      observed.autoSelectFamily = (options as { autoSelectFamily?: boolean }).autoSelectFamily;
+      observed.certificateAuthority = (options as { ca?: unknown }).ca;
+      observed.rejectUnauthorized = (options as { rejectUnauthorized?: unknown }).rejectUnauthorized;
+      const lookup = options.lookup;
+      return nativeHttpsRequest({
+        ...options,
+        lookup(hostname, lookupOptions, done) {
+          observed.lookupCalls += 1;
+          return lookup?.(hostname, lookupOptions, done);
+        },
+      }, callback);
+    }) as typeof nativeHttpsRequest;
+    const transport = createNativeHttpTransportForTest({ httpsRequestFactory: httpsFactory, certificateAuthority });
+
+    await expect(transport.execute(httpsRequest(fixture.port))).resolves.toEqual({ statusCode: 200 });
+
+    expect(observed).toMatchObject({
+      lookupCalls: 1,
+      hostname: secureMonitoredHost,
+      servername: secureMonitoredHost,
+      agent: false,
+      family: 4,
+      autoSelectFamily: false,
+      certificateAuthority,
+    });
+    expect(observed.rejectUnauthorized).toBeUndefined();
+    expect(fixture.requests).toEqual([{
+      host: `${secureMonitoredHost}:${fixture.port}`,
+      url: "/health?private=value",
+      servername: secureMonitoredHost,
+    }]);
+  });
+
+  it("uses normal TLS hostname validation and classifies a certificate mismatch safely", async () => {
+    const fixture = await startHttpsFixture();
+    const transport = createNativeHttpTransportForTest({ certificateAuthority });
+
+    await expect(transport.execute(httpsRequest(fixture.port, "other.test"))).rejects.toMatchObject({
+      outcome: "tls_or_protocol_failure",
+    });
+    expect(fixture.requests).toHaveLength(0);
+  });
+
+  it("uses Node's normal CA store in production", async () => {
+    const fixture = await startHttpsFixture();
+
+    await expect(createNativeHttpTransport().execute(httpsRequest(fixture.port))).rejects.toMatchObject({
+      outcome: "tls_or_protocol_failure",
+    });
+  });
+
+  it("rejects an HTTPS peer mismatch after secureConnect without exposing the peer", async () => {
+    const socket = Object.assign(new EventEmitter(), { remoteAddress: "127.0.0.2" });
+    const clientRequest = Object.assign(new EventEmitter(), {
+      socket,
+      destroy() {},
+      end() {
+        queueMicrotask(() => {
+          clientRequest.emit("socket", socket);
+          socket.emit("secureConnect");
+        });
+      },
+    });
+    const httpsFactory = ((_options: unknown, _callback: unknown) => clientRequest) as typeof nativeHttpsRequest;
+    const transport = createNativeHttpTransportForTest({ httpsRequestFactory: httpsFactory, certificateAuthority });
+
+    await expect(transport.execute(httpsRequest(8443))).rejects.toMatchObject({
+      outcome: "connection_failure",
+    });
+    expect(clientRequest.listenerCount("error")).toBe(0);
+    expect(socket.listenerCount("secureConnect")).toBe(0);
+  });
+
+  it("releases the HTTPS connection before resolving a drained response", async () => {
+    const fixture = await startHttpsFixture();
+    const transport = createNativeHttpTransportForTest({ certificateAuthority });
+
+    await expect(transport.execute(httpsRequest(fixture.port))).resolves.toEqual({ statusCode: 200 });
+
+    const connections = await new Promise<number>((resolve, reject) => {
+      httpsServer?.getConnections((error, count) => error ? reject(error) : resolve(count));
+    });
+    expect(connections).toBe(0);
+  });
+
+  it("destroys an in-flight HTTPS request when its shared signal aborts", async () => {
+    const fixture = await startPendingHttpsFixture();
+    const controller = new AbortController();
+    const result = createNativeHttpTransportForTest({ certificateAuthority })
+      .execute({ ...httpsRequest(fixture.port), signal: controller.signal });
+
+    await fixture.requestStarted;
+    controller.abort();
+
+    await expect(result).rejects.toMatchObject({ outcome: "connection_failure" });
+    await fixture.waitForSocketClose();
+  });
+
+  it("treats HTTPS redirects as terminal responses", async () => {
+    const fixture = await startHttpsFixture(302, "/next");
+    const transport = createNativeHttpTransportForTest({ certificateAuthority });
+
+    await expect(transport.execute(httpsRequest(fixture.port))).resolves.toEqual({ statusCode: 302 });
+    expect(fixture.requests).toHaveLength(1);
   });
 });
