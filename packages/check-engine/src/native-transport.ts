@@ -32,17 +32,53 @@ function createPinnedHttpTransport(requestFactory: HttpRequestFactory): Constrai
 
       return new Promise((resolve, reject) => {
         let clientRequest: ClientRequest | undefined;
+        let response: import("node:http").IncomingMessage | undefined;
+        let socket: import("node:net").Socket | undefined;
         let settled = false;
+        const cleanup = () => {
+          request.signal.removeEventListener("abort", onAbort);
+          clientRequest?.removeListener("error", onRequestError);
+          socket?.removeListener("connect", onConnect);
+          response?.removeListener("end", onResponseEnd);
+          response?.removeListener("close", onResponseClose);
+          response?.removeListener("error", onResponseError);
+          response?.removeListener("aborted", onResponseAborted);
+        };
         const settle = (callback: () => void) => {
           if (settled) return;
           settled = true;
-          request.signal.removeEventListener("abort", onAbort);
+          cleanup();
           callback();
         };
         const fail = (error: unknown) => settle(() => reject(connectionFailure(error)));
+        const onRequestError = (error: Error) => {
+          fail(error);
+          clientRequest?.destroy();
+        };
         const onAbort = () => {
-          clientRequest?.destroy(new CheckTransportError("connection_failure"));
+          response?.destroy();
+          clientRequest?.destroy();
           fail(new CheckTransportError("connection_failure"));
+        };
+        const onResponseError = (error: Error) => {
+          fail(error);
+          response?.destroy();
+          clientRequest?.destroy();
+        };
+        const onResponseAborted = () => {
+          fail(new CheckTransportError("connection_failure"));
+          clientRequest?.destroy();
+        };
+        const onResponseEnd = () => settle(() => resolve({ statusCode: response?.statusCode as number }));
+        const onResponseClose = () => {
+          if (!response?.complete) fail(new CheckTransportError("connection_failure"));
+        };
+        const onConnect = () => {
+          if (socket?.remoteAddress !== request.address.address) {
+            const error = new CheckTransportError("connection_failure");
+            clientRequest?.destroy();
+            fail(error);
+          }
         };
 
         request.signal.addEventListener("abort", onAbort, { once: true });
@@ -60,11 +96,12 @@ function createPinnedHttpTransport(requestFactory: HttpRequestFactory): Constrai
             lookup: pinnedLookup(request.address),
             signal: request.signal,
           };
-          clientRequest = requestFactory(options as RequestOptions, (response) => {
+          clientRequest = requestFactory(options as RequestOptions, (incomingResponse) => {
+            response = incomingResponse;
             const peerAddress = clientRequest?.socket?.remoteAddress;
             if (peerAddress !== request.address.address) {
               response.resume();
-              clientRequest?.destroy(new CheckTransportError("connection_failure"));
+              clientRequest?.destroy();
               fail(new CheckTransportError("connection_failure"));
               return;
             }
@@ -74,18 +111,16 @@ function createPinnedHttpTransport(requestFactory: HttpRequestFactory): Constrai
               fail(new CheckTransportError("tls_or_protocol_failure"));
               return;
             }
+            response.once("error", onResponseError);
+            response.once("aborted", onResponseAborted);
+            response.once("end", onResponseEnd);
+            response.once("close", onResponseClose);
             response.resume();
-            settle(() => resolve({ statusCode: statusCode as number }));
           });
-          clientRequest.once("error", fail);
-          clientRequest.once("socket", (socket) => {
-            socket.once("connect", () => {
-              if (socket.remoteAddress !== request.address.address) {
-                const error = new CheckTransportError("connection_failure");
-                clientRequest?.destroy(error);
-                fail(error);
-              }
-            });
+          clientRequest.once("error", onRequestError);
+          clientRequest.once("socket", (nextSocket) => {
+            socket = nextSocket;
+            socket.once("connect", onConnect);
           });
           clientRequest.end();
         } catch (error) {
