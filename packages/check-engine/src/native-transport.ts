@@ -1,11 +1,32 @@
-import { request as httpRequest, type ClientRequest, type RequestOptions } from "node:http";
+import { request as httpRequest, type ClientRequest, type IncomingMessage, type RequestOptions } from "node:http";
+import { request as httpsRequest, type RequestOptions as HttpsRequestOptions } from "node:https";
 import type { LookupFunction } from "node:net";
 import { CheckTransportError, type ConstrainedTransport, type TransportRequest } from "./types.ts";
 
-function connectionFailure(error: unknown): CheckTransportError {
+type HttpRequestFactory = typeof httpRequest;
+type HttpsRequestFactory = typeof httpsRequest;
+
+type NativeTransportTestOptions = Readonly<{
+  httpRequestFactory?: HttpRequestFactory;
+  httpsRequestFactory?: HttpsRequestFactory;
+  /** Test-only CA material. Production always uses Node's normal trust store. */
+  certificateAuthority?: string;
+}>;
+
+function connectionFailure(error: unknown, protocol: TransportRequest["target"]["protocol"]): CheckTransportError {
   return error instanceof CheckTransportError
     ? error
+    : protocol === "https:" && isTlsError(error)
+      ? new CheckTransportError("tls_or_protocol_failure")
     : new CheckTransportError("connection_failure");
+}
+
+function isTlsError(error: unknown): boolean {
+  const code = error instanceof Error ? (error as Error & { code?: string }).code : undefined;
+  return code === "EPROTO"
+    || code?.startsWith("ERR_TLS_") === true
+    || code?.includes("CERT") === true
+    || code?.includes("VERIFY") === true;
 }
 
 function pinnedLookup(address: TransportRequest["address"]): LookupFunction {
@@ -19,20 +40,22 @@ function pinnedLookup(address: TransportRequest["address"]): LookupFunction {
   };
 }
 
-/** Creates an HTTP-only transport that can connect only through a pre-validated address. */
-type HttpRequestFactory = typeof httpRequest;
-
-function createPinnedHttpTransport(requestFactory: HttpRequestFactory): ConstrainedTransport {
+function createPinnedNativeTransport(
+  httpRequestFactory: HttpRequestFactory,
+  httpsRequestFactory: HttpsRequestFactory,
+  certificateAuthority?: string,
+): ConstrainedTransport {
   return Object.freeze({
     execute(request: TransportRequest): Promise<{ statusCode: number }> {
-      if (request.target.protocol !== "http:") {
+      if (request.target.protocol !== "http:" && request.target.protocol !== "https:") {
         return Promise.reject(new CheckTransportError("tls_or_protocol_failure"));
       }
       if (request.signal.aborted) return Promise.reject(new CheckTransportError("connection_failure"));
+      const isHttps = request.target.protocol === "https:";
 
       return new Promise((resolve, reject) => {
         let clientRequest: ClientRequest | undefined;
-        let response: import("node:http").IncomingMessage | undefined;
+        let response: IncomingMessage | undefined;
         let socket: import("node:net").Socket | undefined;
         let settled = false;
         let responseEnded = false;
@@ -40,7 +63,7 @@ function createPinnedHttpTransport(requestFactory: HttpRequestFactory): Constrai
         const cleanup = () => {
           request.signal.removeEventListener("abort", onAbort);
           clientRequest?.removeListener("error", onRequestError);
-          socket?.removeListener("connect", onConnect);
+          socket?.removeListener(isHttps ? "secureConnect" : "connect", onConnectedPeer);
           socket?.removeListener("close", onSocketClose);
           response?.removeListener("end", onResponseEnd);
           response?.removeListener("close", onResponseClose);
@@ -53,7 +76,7 @@ function createPinnedHttpTransport(requestFactory: HttpRequestFactory): Constrai
           cleanup();
           callback();
         };
-        const fail = (error: unknown) => settle(() => reject(connectionFailure(error)));
+        const fail = (error: unknown) => settle(() => reject(connectionFailure(error, request.target.protocol)));
         const onRequestError = (error: Error) => {
           fail(error);
           clientRequest?.destroy();
@@ -88,7 +111,7 @@ function createPinnedHttpTransport(requestFactory: HttpRequestFactory): Constrai
           socketClosed = true;
           succeedAfterDrain();
         };
-        const onConnect = () => {
+        const onConnectedPeer = () => {
           if (socket?.remoteAddress !== request.address.address) {
             const error = new CheckTransportError("connection_failure");
             clientRequest?.destroy();
@@ -99,8 +122,8 @@ function createPinnedHttpTransport(requestFactory: HttpRequestFactory): Constrai
         request.signal.addEventListener("abort", onAbort, { once: true });
         try {
           const url = new URL(request.target.normalizedUrl);
-          const options: RequestOptions & { autoSelectFamily: boolean } = {
-            protocol: "http:",
+          const options: RequestOptions & HttpsRequestOptions & { autoSelectFamily: boolean } = {
+            protocol: request.target.protocol,
             hostname: request.target.originalHostname,
             port: request.target.port,
             path: `${url.pathname}${url.search}`,
@@ -111,7 +134,11 @@ function createPinnedHttpTransport(requestFactory: HttpRequestFactory): Constrai
             lookup: pinnedLookup(request.address),
             signal: request.signal,
           };
-          clientRequest = requestFactory(options as RequestOptions, (incomingResponse) => {
+          if (isHttps) {
+            options.servername = request.target.originalHostname;
+            if (certificateAuthority) options.ca = certificateAuthority;
+          }
+          const onResponse = (incomingResponse: IncomingMessage) => {
             response = incomingResponse;
             const peerAddress = clientRequest?.socket?.remoteAddress;
             if (peerAddress !== request.address.address) {
@@ -131,11 +158,14 @@ function createPinnedHttpTransport(requestFactory: HttpRequestFactory): Constrai
             response.once("end", onResponseEnd);
             response.once("close", onResponseClose);
             response.resume();
-          });
+          };
+          clientRequest = isHttps
+            ? httpsRequestFactory(options as HttpsRequestOptions, onResponse)
+            : httpRequestFactory(options as RequestOptions, onResponse);
           clientRequest.once("error", onRequestError);
           clientRequest.once("socket", (nextSocket) => {
             socket = nextSocket;
-            socket.once("connect", onConnect);
+            socket.once(isHttps ? "secureConnect" : "connect", onConnectedPeer);
             socket.once("close", onSocketClose);
           });
           clientRequest.end();
@@ -147,12 +177,21 @@ function createPinnedHttpTransport(requestFactory: HttpRequestFactory): Constrai
   });
 }
 
-/** Creates the production HTTP-only pinned transport. */
+/** Creates the production HTTP(S) pinned transport. */
 export function createNativeHttpTransport(): ConstrainedTransport {
-  return createPinnedHttpTransport(httpRequest);
+  return createPinnedNativeTransport(httpRequest, httpsRequest);
 }
 
-/** Test-only seam for deterministic peer-address mismatch verification. */
-export function createNativeHttpTransportForTest(requestFactory: HttpRequestFactory): ConstrainedTransport {
-  return createPinnedHttpTransport(requestFactory);
+/** Test-only seam for peer checks and an ephemeral fixture CA. */
+export function createNativeHttpTransportForTest(
+  requestFactoryOrOptions: HttpRequestFactory | NativeTransportTestOptions,
+): ConstrainedTransport {
+  const options = typeof requestFactoryOrOptions === "function"
+    ? { httpRequestFactory: requestFactoryOrOptions }
+    : requestFactoryOrOptions;
+  return createPinnedNativeTransport(
+    options.httpRequestFactory ?? httpRequest,
+    options.httpsRequestFactory ?? httpsRequest,
+    options.certificateAuthority,
+  );
 }
