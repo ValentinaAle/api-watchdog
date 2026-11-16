@@ -113,6 +113,55 @@ describe("http check engine", () => {
     }
   });
 
+  it("shares one absolute-deadline signal from DNS through an active transport", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolverSignal: AbortSignal | undefined;
+      let transportSignal: AbortSignal | undefined;
+      let activeTransports = 0;
+      let transportCleanupCalls = 0;
+      const delayedResolver = {
+        resolve4: vi.fn((_hostname: string, options?: { signal?: AbortSignal }) => {
+          resolverSignal = options?.signal;
+          return new Promise<readonly string[]>((resolve) => {
+            setTimeout(() => resolve(["8.8.8.8"]), 500);
+          });
+        }),
+        resolve6: vi.fn(async () => []),
+      };
+      const abortAwareTransport = {
+        execute: vi.fn(({ signal }: { signal: AbortSignal }) => new Promise<{ statusCode: number }>((_resolve, reject) => {
+          transportSignal = signal;
+          activeTransports += 1;
+          const onAbort = () => {
+            signal.removeEventListener("abort", onAbort);
+            activeTransports -= 1;
+            transportCleanupCalls += 1;
+            reject(new Error("transport aborted"));
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+        })),
+      };
+
+      const run = executeCheck(
+        { ...input, timeoutMs: 1_000 },
+        { resolver: delayedResolver, transport: abortAwareTransport },
+      );
+      await vi.advanceTimersByTimeAsync(500);
+      expect(abortAwareTransport.execute).toHaveBeenCalledTimes(1);
+      expect(resolverSignal).toBe(transportSignal);
+      expect(transportSignal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(run).resolves.toMatchObject({ outcome: "timeout" });
+      expect(transportSignal?.aborted).toBe(true);
+      expect(activeTransports).toBe(0);
+      expect(transportCleanupCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("aborts an in-flight resolver and releases it without dispatching transport", async () => {
     vi.useFakeTimers();
     try {
