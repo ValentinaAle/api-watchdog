@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import { createServer as createHttpsServer, request as nativeHttpsRequest, type Server as HttpsServer } from "node:https";
 import { EventEmitter, once } from "node:events";
@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createNativeHttpTransport, createNativeHttpTransportForTest } from "../../packages/check-engine/src/native-transport.ts";
 import type { TransportRequest } from "../../packages/check-engine/src/types.ts";
+import { executeCheck } from "../../packages/check-engine/src/engine.ts";
 
 const monitoredHost = "pinned-target.invalid";
 const secureMonitoredHost = "monitor.test";
@@ -99,6 +100,31 @@ async function startFixture(statusCode = 200, location?: string) {
   return { port: address.port, requests };
 }
 
+async function startStreamingHttpFixture() {
+  let markResponseStarted!: () => void;
+  const responseStarted = new Promise<void>((resolve) => { markResponseStarted = resolve; });
+  let socketClosed: Promise<unknown> | undefined;
+  server = createServer((request, response) => {
+    socketClosed = once(request.socket, "close");
+    response.writeHead(200);
+    response.write("partial response");
+    markResponseStarted();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("streaming fixture did not bind to TCP");
+  return {
+    port: address.port,
+    responseStarted,
+    async waitForSocketClose() {
+      await responseStarted;
+      if (!socketClosed) throw new Error("streaming fixture did not receive a socket");
+      await socketClosed;
+    },
+  };
+}
+
 function request(port: number, signal = new AbortController().signal): TransportRequest {
   return {
     target: {
@@ -178,6 +204,86 @@ function controlledTransportFixture(statusCode = 200) {
   return { clientRequest, requestFactory, response, socket };
 }
 
+const executionAddress = { address: "8.8.8.8", family: 4 as const };
+
+function deadlineRequestFactory(phase: "tls" | "headers" | "drain") {
+  let resolveReady!: () => void;
+  const ready = new Promise<void>((resolve) => { resolveReady = resolve; });
+  const response = Object.assign(new EventEmitter(), {
+    statusCode: 200,
+    complete: false,
+    destroyCalls: 0,
+    resume() {},
+    destroy() {
+      response.destroyCalls += 1;
+      response.emit("close");
+    },
+  });
+  const socket = Object.assign(new EventEmitter(), {
+    remoteAddress: executionAddress.address,
+    destroyed: false,
+    destroyCalls: 0,
+    destroy() {
+      if (socket.destroyed) return;
+      socket.destroyed = true;
+      socket.destroyCalls += 1;
+      socket.emit("close");
+    },
+  });
+  let onResponse: ((value: typeof response) => void) | undefined;
+  let requestSignal: AbortSignal | undefined;
+  const clientRequest = Object.assign(new EventEmitter(), {
+    socket,
+    destroyCalls: 0,
+    destroy() {
+      clientRequest.destroyCalls += 1;
+      socket.destroy();
+    },
+    end() {
+      queueMicrotask(() => {
+        clientRequest.emit("socket", socket);
+        if (phase === "tls") {
+          resolveReady();
+          return;
+        }
+        socket.emit("secureConnect");
+        if (phase === "headers") {
+          resolveReady();
+          return;
+        }
+        onResponse?.(response);
+        resolveReady();
+      });
+    },
+  });
+  const requestFactory = ((options: { signal?: AbortSignal }, callback: (value: typeof response) => void) => {
+    requestSignal = options.signal;
+    onResponse = callback;
+    return clientRequest;
+  }) as typeof nativeHttpsRequest;
+
+  return { clientRequest, ready, requestFactory, response, socket, signal: () => requestSignal };
+}
+
+function executionResolver(receiveSignal: (signal: AbortSignal | undefined) => void) {
+  return {
+    resolve4: vi.fn((_hostname: string, options?: { signal?: AbortSignal }) => {
+      receiveSignal(options?.signal);
+      return Promise.resolve([executionAddress.address]);
+    }),
+    resolve6: vi.fn(async () => []),
+  };
+}
+
+function executionInput(timeoutMs = 1_000) {
+  return {
+    url: "https://monitor.example.com/health?token=private",
+    method: "GET" as const,
+    timeoutMs,
+    expectedStatus: 200,
+  };
+}
+
 afterEach(async () => {
   if (server) {
     server.close();
@@ -198,6 +304,51 @@ afterAll(async () => {
 });
 
 describe("native pinned HTTP transport", () => {
+  it.each([
+    ["TLS connection", "tls"],
+    ["response headers", "headers"],
+    ["response drain", "drain"],
+  ] as const)("propagates executeCheck's deadline through pending %s", async (_stage, phase) => {
+    vi.useFakeTimers();
+    try {
+      const controlled = deadlineRequestFactory(phase);
+      let resolverSignal: AbortSignal | undefined;
+      const transport = createNativeHttpTransportForTest({
+        httpsRequestFactory: controlled.requestFactory,
+        certificateAuthority,
+      });
+      const run = executeCheck(executionInput(), {
+        resolver: executionResolver((signal) => { resolverSignal = signal; }),
+        transport,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      await controlled.ready;
+      expect(resolverSignal).toBe(controlled.signal());
+      expect(controlled.signal()?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(run).resolves.toMatchObject({ outcome: "timeout" });
+      expect(controlled.signal()?.aborted).toBe(true);
+      expect(controlled.clientRequest.destroyCalls).toBe(1);
+      expect(controlled.socket.destroyed).toBe(true);
+      expect(controlled.socket.destroyCalls).toBe(1);
+      expect(controlled.clientRequest.listenerCount("error")).toBe(0);
+      expect(controlled.socket.listenerCount("secureConnect")).toBe(0);
+      expect(controlled.socket.listenerCount("close")).toBe(0);
+
+      if (phase === "drain") {
+        expect(controlled.response.destroyCalls).toBe(1);
+        expect(controlled.response.listenerCount("end")).toBe(0);
+        expect(controlled.response.listenerCount("close")).toBe(0);
+      }
+      controlled.response.emit("end");
+      expect(controlled.clientRequest.destroyCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("connects only through the selected address and preserves the original Host", async () => {
     const fixture = await startFixture();
     const transport = createNativeHttpTransport();
@@ -298,6 +449,18 @@ describe("native pinned HTTP transport", () => {
     expect(controlled.socket.listenerCount("connect")).toBe(0);
     expect(controlled.response.listenerCount("end")).toBe(0);
     expect(controlled.response.listenerCount("close")).toBe(0);
+  });
+
+  it("closes a real loopback HTTP response and socket when aborted during drain", async () => {
+    const fixture = await startStreamingHttpFixture();
+    const controller = new AbortController();
+    const result = createNativeHttpTransport().execute({ ...request(fixture.port), signal: controller.signal });
+
+    await fixture.responseStarted;
+    controller.abort();
+
+    await expect(result).rejects.toMatchObject({ outcome: "connection_failure" });
+    await fixture.waitForSocketClose();
   });
 
   it.each([301, 302, 307, 308])("treats %i redirects as a terminal response", async (statusCode) => {

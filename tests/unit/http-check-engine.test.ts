@@ -83,6 +83,63 @@ describe("http check engine", () => {
     expect(testTransport.execute).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: MAX_EXECUTION_TIMEOUT_MS }));
   });
 
+  it("uses the ten-second clamp as the absolute deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      let active = 0;
+      let cleanup = 0;
+      const pendingTransport = {
+        execute: vi.fn(({ signal, timeoutMs }: { signal: AbortSignal; timeoutMs: number }) => new Promise<{ statusCode: number }>((_resolve, reject) => {
+          active += 1;
+          const onAbort = () => {
+            signal.removeEventListener("abort", onAbort);
+            active -= 1;
+            cleanup += 1;
+            reject(new Error("aborted"));
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+        })),
+      };
+      const run = executeCheck({ ...input, timeoutMs: 60_000 }, { resolver: resolver(), transport: pendingTransport });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pendingTransport.execute).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: MAX_EXECUTION_TIMEOUT_MS }));
+      expect(active).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(active).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+
+      await expect(run).resolves.toMatchObject({ outcome: "timeout" });
+      expect(active).toBe(0);
+      expect(cleanup).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("redacts sensitive transport failures that arrive with a timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const sensitive = "https://user:secret@monitor.example.com/?token=query 203.0.113.7 cookie=session body=private stack=trace";
+      const pendingTransport = {
+        execute: vi.fn(({ signal }: { signal: AbortSignal }) => new Promise<{ statusCode: number }>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error(sensitive)), { once: true });
+        })),
+      };
+      const run = executeCheck({ ...input, timeoutMs: 1_000 }, { resolver: resolver(), transport: pendingTransport });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const result = await run;
+      expect(result).toMatchObject({ outcome: "timeout" });
+      const serialized = JSON.stringify(result);
+      for (const fragment of ["user:secret", "token=query", "203.0.113.7", "cookie=session", "body=private", "stack=trace"]) {
+        expect(serialized).not.toContain(fragment);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects invalid execution input before resolver or transport side effects", async () => {
     const testResolver = resolver();
     const testTransport = transport();
@@ -108,6 +165,55 @@ describe("http check engine", () => {
       await expect(run).resolves.toMatchObject({ outcome: "timeout" });
       expect(testTransport.execute).not.toHaveBeenCalled();
       expect(delayedResolver.resolve4.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shares one absolute-deadline signal from DNS through an active transport", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolverSignal: AbortSignal | undefined;
+      let transportSignal: AbortSignal | undefined;
+      let activeTransports = 0;
+      let transportCleanupCalls = 0;
+      const delayedResolver = {
+        resolve4: vi.fn((_hostname: string, options?: { signal?: AbortSignal }) => {
+          resolverSignal = options?.signal;
+          return new Promise<readonly string[]>((resolve) => {
+            setTimeout(() => resolve(["8.8.8.8"]), 500);
+          });
+        }),
+        resolve6: vi.fn(async () => []),
+      };
+      const abortAwareTransport = {
+        execute: vi.fn(({ signal }: { signal: AbortSignal }) => new Promise<{ statusCode: number }>((_resolve, reject) => {
+          transportSignal = signal;
+          activeTransports += 1;
+          const onAbort = () => {
+            signal.removeEventListener("abort", onAbort);
+            activeTransports -= 1;
+            transportCleanupCalls += 1;
+            reject(new Error("transport aborted"));
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+        })),
+      };
+
+      const run = executeCheck(
+        { ...input, timeoutMs: 1_000 },
+        { resolver: delayedResolver, transport: abortAwareTransport },
+      );
+      await vi.advanceTimersByTimeAsync(500);
+      expect(abortAwareTransport.execute).toHaveBeenCalledTimes(1);
+      expect(resolverSignal).toBe(transportSignal);
+      expect(transportSignal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(run).resolves.toMatchObject({ outcome: "timeout" });
+      expect(transportSignal?.aborted).toBe(true);
+      expect(activeTransports).toBe(0);
+      expect(transportCleanupCalls).toBe(1);
     } finally {
       vi.useRealTimers();
     }
