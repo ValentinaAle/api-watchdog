@@ -103,9 +103,21 @@ async function startFixture(statusCode = 200, location?: string) {
 async function startStreamingHttpFixture() {
   let markResponseStarted!: () => void;
   const responseStarted = new Promise<void>((resolve) => { markResponseStarted = resolve; });
-  let socketClosed: Promise<unknown> | undefined;
+  let socketClosed: Promise<readonly NodeJS.ErrnoException[]> | undefined;
   server = createServer((request, response) => {
-    socketClosed = once(request.socket, "close");
+    socketClosed = new Promise((resolve) => {
+      const errors: NodeJS.ErrnoException[] = [];
+      const onError = (error: NodeJS.ErrnoException) => {
+        errors.push(error);
+      };
+      const onClose = () => {
+        request.socket.off("error", onError);
+        resolve(errors);
+      };
+
+      request.socket.on("error", onError);
+      request.socket.once("close", onClose);
+    });
     response.writeHead(200);
     response.write("partial response");
     markResponseStarted();
@@ -120,7 +132,8 @@ async function startStreamingHttpFixture() {
     async waitForSocketClose() {
       await responseStarted;
       if (!socketClosed) throw new Error("streaming fixture did not receive a socket");
-      await socketClosed;
+      const errors = await socketClosed;
+      for (const error of errors) expect(error.code).toBe("ECONNRESET");
     },
   };
 }
