@@ -138,6 +138,29 @@ async function startStreamingHttpFixture() {
   };
 }
 
+async function startResponseLimitFixture(chunks: readonly Buffer[], contentLength?: number) {
+  let socketClosed: Promise<void> | undefined;
+  server = createServer((request, response) => {
+    socketClosed = new Promise((resolve) => {
+      request.socket.once("close", resolve);
+    });
+    response.writeHead(200, contentLength === undefined ? undefined : { "content-length": contentLength });
+    for (const chunk of chunks) response.write(chunk);
+    response.end();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("response-limit fixture did not bind to TCP");
+  return {
+    port: address.port,
+    async waitForSocketClose() {
+      if (!socketClosed) throw new Error("response-limit fixture did not receive a socket");
+      await socketClosed;
+    },
+  };
+}
+
 function request(port: number, signal = new AbortController().signal): TransportRequest {
   return {
     target: {
@@ -474,6 +497,39 @@ describe("native pinned HTTP transport", () => {
 
     await expect(result).rejects.toMatchObject({ outcome: "connection_failure" });
     await fixture.waitForSocketClose();
+  });
+
+  it("accepts a response exactly at the response-byte limit", async () => {
+    const fixture = await startResponseLimitFixture([Buffer.alloc(1_048_576)]);
+
+    await expect(createNativeHttpTransport().execute(request(fixture.port))).resolves.toEqual({ statusCode: 200 });
+  });
+
+  it.each([
+    ["without Content-Length", [Buffer.alloc(1_048_577)], undefined],
+    ["across multiple chunks", [Buffer.alloc(524_288), Buffer.alloc(524_289)], undefined],
+  ] as const)("rejects a response one byte over the limit %s", async (_description, chunks, contentLength) => {
+    const fixture = await startResponseLimitFixture(chunks, contentLength);
+
+    await expect(createNativeHttpTransport().execute(request(fixture.port))).rejects.toMatchObject({
+      outcome: "response_limit",
+    });
+    await fixture.waitForSocketClose();
+  });
+
+  it("rejects streamed bytes beyond a deceptive smaller Content-Length", async () => {
+    const controlled = controlledTransportFixture();
+    Object.assign(controlled.response, { headers: { "content-length": "1" } });
+    const result = createNativeHttpTransportForTest(controlled.requestFactory).execute(request(8080));
+
+    await Promise.resolve();
+    await Promise.resolve();
+    controlled.response.emit("data", Buffer.alloc(1_048_576));
+    controlled.response.emit("data", Buffer.from("x"));
+
+    await expect(result).rejects.toMatchObject({ outcome: "response_limit" });
+    expect(controlled.response.destroyCalls).toBe(1);
+    expect(controlled.clientRequest.destroyCalls).toBe(1);
   });
 
   it.each([301, 302, 307, 308])("treats %i redirects as a terminal response", async (statusCode) => {

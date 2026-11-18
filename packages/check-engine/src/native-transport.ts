@@ -60,6 +60,8 @@ function createPinnedNativeTransport(
         let settled = false;
         let responseEnded = false;
         let socketClosed = false;
+        let receivedBytes = 0;
+        let onResponseData: (chunk: Buffer | string) => void;
         const cleanup = () => {
           request.signal.removeEventListener("abort", onAbort);
           clientRequest?.removeListener("error", onRequestError);
@@ -69,6 +71,7 @@ function createPinnedNativeTransport(
           response?.removeListener("close", onResponseClose);
           response?.removeListener("error", onResponseError);
           response?.removeListener("aborted", onResponseAborted);
+          response?.removeListener("data", onResponseData);
         };
         const settle = (callback: () => void) => {
           if (settled) return;
@@ -93,6 +96,16 @@ function createPinnedNativeTransport(
         };
         const onResponseAborted = () => {
           fail(new CheckTransportError("connection_failure"));
+          clientRequest?.destroy();
+        };
+        onResponseData = (chunk) => {
+          const chunkBytes = typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
+          if (receivedBytes + chunkBytes <= request.maxResponseBytes) {
+            receivedBytes += chunkBytes;
+            return;
+          }
+          fail(new CheckTransportError("response_limit"));
+          response?.destroy();
           clientRequest?.destroy();
         };
         const succeedAfterDrain = () => {
@@ -157,6 +170,7 @@ function createPinnedNativeTransport(
             response.once("aborted", onResponseAborted);
             response.once("end", onResponseEnd);
             response.once("close", onResponseClose);
+            response.on("data", onResponseData);
             response.resume();
           };
           clientRequest = isHttps
