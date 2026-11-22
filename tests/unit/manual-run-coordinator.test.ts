@@ -78,6 +78,107 @@ describe("manual-run Redis admission safety", () => {
       .resolves.toEqual({ kind: "unavailable" });
   });
 
+  it("retries a new independent admission after persistent client creation failures", async () => {
+    let creations = 0;
+    const execute = createProductionAdmissionExecutor({
+      redisUrl: "redis://unavailable.example:6379",
+      createClient: () => {
+        creations += 1;
+        throw new Error("connection failed");
+      },
+    });
+
+    await expect(execute(`${ADMISSION_VALIDITY_LUA}return { "ADMITTED" }`, [], []))
+      .resolves.toEqual({ kind: "unavailable" });
+    await expect(execute(`${ADMISSION_VALIDITY_LUA}return { "ADMITTED" }`, [], []))
+      .resolves.toEqual({ kind: "unavailable" });
+    expect(creations).toBe(2);
+  });
+
+  it("discards a lost EVAL client and uses a fresh client only for the next admission", async () => {
+    vi.useFakeTimers();
+    let monotonic = 0;
+    const oldReply = deferred<unknown>();
+    const oldDisconnect = vi.fn(() => { throw new Error("close failed"); });
+    const oldClient: RedisScriptClient = {
+      time: async () => redisTime(10_000),
+      eval: async () => oldReply.promise,
+      disconnect: oldDisconnect,
+    };
+    const freshClient: RedisScriptClient = {
+      time: async () => redisTime(20_000),
+      eval: async () => ["ADMITTED"],
+    };
+    let creations = 0;
+    const execute = createProductionAdmissionExecutor({
+      redisUrl: "redis://coordination.example:6379",
+      createClient: () => (++creations === 1 ? oldClient : freshClient),
+      monotonicNow: () => monotonic,
+      operationTimeoutMs: 2_000,
+    });
+
+    try {
+      const first = execute(`${ADMISSION_VALIDITY_LUA}return { "ADMITTED" }`, [], []);
+      await vi.advanceTimersByTimeAsync(0);
+      monotonic = 2_000;
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(first).resolves.toEqual({ kind: "unavailable" });
+      expect(oldDisconnect).toHaveBeenCalledTimes(1);
+
+      monotonic = 5_000;
+      await expect(execute(`${ADMISSION_VALIDITY_LUA}return { "ADMITTED" }`, [], []))
+        .resolves.toEqual({ kind: "accepted" });
+      expect(creations).toBe(2);
+
+      oldReply.resolve(["ADMITTED"]);
+      await Promise.resolve();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("discards a lost TIME preflight before a new admission starts", async () => {
+    vi.useFakeTimers();
+    let monotonic = 0;
+    const oldTime = deferred<readonly [string, string]>();
+    const oldDisconnect = vi.fn();
+    const oldClient: RedisScriptClient = {
+      time: async () => oldTime.promise,
+      eval: async () => ["ADMITTED"],
+      disconnect: oldDisconnect,
+    };
+    const freshClient: RedisScriptClient = {
+      time: async () => redisTime(30_000),
+      eval: async () => ["ADMITTED"],
+    };
+    let creations = 0;
+    const execute = createProductionAdmissionExecutor({
+      redisUrl: "redis://coordination.example:6379",
+      createClient: () => (++creations === 1 ? oldClient : freshClient),
+      monotonicNow: () => monotonic,
+      operationTimeoutMs: 2_000,
+    });
+
+    try {
+      const first = execute(`${ADMISSION_VALIDITY_LUA}return { "ADMITTED" }`, [], []);
+      await vi.advanceTimersByTimeAsync(0);
+      monotonic = 2_000;
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(first).resolves.toEqual({ kind: "unavailable" });
+      expect(oldDisconnect).toHaveBeenCalledTimes(1);
+
+      monotonic = 5_000;
+      await expect(execute(`${ADMISSION_VALIDITY_LUA}return { "ADMITTED" }`, [], []))
+        .resolves.toEqual({ kind: "accepted" });
+      expect(creations).toBe(2);
+
+      oldTime.resolve(redisTime(0));
+      await Promise.resolve();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not accept a lost response even when Redis may execute later", async () => {
     vi.useFakeTimers();
     const response = deferred<unknown>();

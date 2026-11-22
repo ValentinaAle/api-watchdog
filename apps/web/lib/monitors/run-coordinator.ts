@@ -5,6 +5,7 @@ import { createManualRunRedisConnection } from "@api-watchdog/queue";
 export const COORDINATION_OPERATION_TIMEOUT_MS = 2_000;
 
 export type RedisScriptClient = {
+  disconnect?: () => void | Promise<void>;
   eval(script: string, numberOfKeys: number, ...args: string[]): Promise<unknown>;
   time(): Promise<readonly (string | number)[]>;
 };
@@ -17,6 +18,7 @@ export type AdmissionAttempt =
   | Readonly<{ kind: "unavailable" }>;
 
 type AdmissionOptions = Readonly<{
+  discardClient?: (client: RedisScriptClient) => void;
   getClient: () => Promise<RedisScriptClient>;
   monotonicNow?: () => number;
   operationTimeoutMs?: number;
@@ -83,52 +85,65 @@ export function createAdmissionExecutor(options: AdmissionOptions) {
     if (!script.startsWith(ADMISSION_VALIDITY_LUA)) return { kind: "unavailable" };
     const localDeadline = monotonicNow() + operationTimeoutMs;
     const remaining = () => Math.max(0, Math.floor(localDeadline - monotonicNow()));
+    let client: RedisScriptClient | undefined;
+    const unavailable = (): AdmissionAttempt => {
+      if (client) {
+        try {
+          options.discardClient?.(client);
+        } catch {
+          // Closing an uncertain connection must not turn an admission into success.
+        }
+      }
+      return { kind: "unavailable" };
+    };
     try {
-      const client = await waitForReply(options.getClient(), remaining());
-      if (!client || remaining() === 0) return { kind: "unavailable" };
+      client = await waitForReply(options.getClient(), remaining());
+      if (!client || remaining() === 0) return client ? unavailable() : { kind: "unavailable" };
       const redisNow = serverTimeMs(await waitForReply(client.time(), remaining()));
-      if (redisNow === undefined || remaining() === 0) return { kind: "unavailable" };
+      if (redisNow === undefined || remaining() === 0) return unavailable();
       const validity: AdmissionValidity = { serverDeadlineMs: redisNow + remaining() };
       const result = await waitForReply(
         client.eval(script, keys.length, ...keys, ...args, String(validity.serverDeadlineMs)),
         remaining(),
       );
-      if (remaining() === 0) return { kind: "unavailable" };
+      if (remaining() === 0) return unavailable();
       const reply = replyValue(result);
       if (reply === "ADMISSION_EXPIRED") return { kind: "expired" };
       if (reply === "ADMITTED") return { kind: "accepted" };
-      return { kind: "unavailable" };
+      return unavailable();
     } catch {
-      return { kind: "unavailable" };
+      return unavailable();
     }
   };
 }
 
 /**
- * Builds a bounded, non-queueing production dependency for PR1B. A client
- * that disconnects after creation stays unavailable for this process instance:
- * it is deliberately not retried or replaced because an uncertain command
- * must never gain a later admission window.
+ * Builds a bounded, non-queueing production dependency for PR1B. An uncertain
+ * client is discarded immediately; the next independent admission gets a new
+ * connection and its own bounded window. The old command is never resent.
  */
 export function createProductionAdmissionExecutor(options: ProductionAdmissionOptions = {}) {
   const redisUrl = options.redisUrl ?? process.env.REDIS_URL;
   const createClient = options.createClient ?? createManualRunRedisConnection;
   let client: RedisScriptClient | undefined;
-  let unavailable = !redisUrl;
 
   return createAdmissionExecutor({
+    discardClient: (discardedClient) => {
+      if (client !== discardedClient) return;
+      client = undefined;
+      try {
+        void Promise.resolve(discardedClient.disconnect?.()).catch(() => undefined);
+      } catch {
+        // The next independent admission still creates a bounded fresh client.
+      }
+    },
     monotonicNow: options.monotonicNow,
     operationTimeoutMs: options.operationTimeoutMs,
     getClient: async () => {
-      if (unavailable || !redisUrl) throw new Error("Redis unavailable");
-      try {
-        const currentClient = client ?? createClient(redisUrl);
-        client = currentClient;
-        return currentClient;
-      } catch {
-        unavailable = true;
-        throw new Error("Redis unavailable");
-      }
+      if (!redisUrl) throw new Error("Redis unavailable");
+      const currentClient = client ?? createClient(redisUrl);
+      client = currentClient;
+      return currentClient;
     },
   });
 }
