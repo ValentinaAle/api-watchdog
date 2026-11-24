@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createManualRunHandlers } from "../../apps/web/lib/monitors/run.ts";
 import type { MonitorRecord } from "../../apps/web/lib/monitors/http.ts";
 
@@ -12,6 +12,12 @@ function setup(overrides: Partial<Parameters<typeof createManualRunHandlers>[0]>
 }
 const params = { projectId: monitor.projectId, monitorId: monitor.id };
 
+function streamedRequest(stream: ReadableStream<Uint8Array>, headers?: HeadersInit) {
+  return new Request("http://x/api", { method: "POST", body: stream, headers, duplex: "half" });
+}
+
+afterEach(() => vi.useRealTimers());
+
 describe("manual run handler", () => {
   it("rejects invalid params, query and bodies before lookup", async () => {
     const { handler, repository, coordinator, execute } = setup();
@@ -20,6 +26,39 @@ describe("manual run handler", () => {
     }
     expect((await handler.POST(new Request("http://x/api", { method: "POST" }), { ...params, monitorId: "bad" })).status).toBe(400);
     expect(repository.get).not.toHaveBeenCalled(); expect(coordinator.acquire).not.toHaveBeenCalled(); expect(execute).not.toHaveBeenCalled();
+  });
+  it("accepts only an actually empty POST stream and fails closed before lookup for body-stream ambiguity", async () => {
+    const empty = setup();
+    expect((await empty.handler.POST(streamedRequest(new ReadableStream({ start(controller) { controller.close(); } })), params)).status).toBe(200);
+    expect(empty.repository.get).toHaveBeenCalledTimes(1);
+
+    const contentLengthZero = setup();
+    expect((await contentLengthZero.handler.POST(streamedRequest(new ReadableStream({ start(controller) { controller.close(); } }), { "Content-Length": "0" }), params)).status).toBe(200);
+
+    const misleadingLength = setup();
+    expect((await misleadingLength.handler.POST(streamedRequest(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array([1])); controller.close(); } }), { "Content-Length": "0" }), params)).status).toBe(400);
+    expect(misleadingLength.repository.get).not.toHaveBeenCalled();
+
+    for (const body of ["{}", "text", "   "]) {
+      const rejected = setup();
+      expect((await rejected.handler.POST(new Request("http://x/api", { method: "POST", body } ), params)).status).toBe(400);
+      expect(rejected.repository.get).not.toHaveBeenCalled(); expect(rejected.coordinator.acquire).not.toHaveBeenCalled(); expect(rejected.execute).not.toHaveBeenCalled();
+    }
+
+    const withoutLength = setup();
+    expect((await withoutLength.handler.POST(streamedRequest(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array([1])); } })), params)).status).toBe(400);
+    expect(withoutLength.repository.get).not.toHaveBeenCalled();
+
+    const failedStream = setup();
+    expect((await failedStream.handler.POST(streamedRequest(new ReadableStream({ start(controller) { controller.error(new Error("secret")); } })), params)).status).toBe(400);
+    expect(failedStream.repository.get).not.toHaveBeenCalled();
+
+    vi.useFakeTimers();
+    const stalled = setup();
+    const response = stalled.handler.POST(streamedRequest(new ReadableStream({ pull() { return new Promise(() => undefined); } })), params);
+    await vi.advanceTimersByTimeAsync(101);
+    expect((await response).status).toBe(400);
+    expect(stalled.repository.get).not.toHaveBeenCalled(); expect(stalled.coordinator.acquire).not.toHaveBeenCalled(); expect(stalled.execute).not.toHaveBeenCalled();
   });
   it("uses only a scoped lookup and makes absent/foreign monitors indistinguishable", async () => {
     const { handler, repository, coordinator, execute } = setup({ repository: { get: vi.fn(async () => null) } as never });
