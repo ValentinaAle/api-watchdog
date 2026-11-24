@@ -33,8 +33,47 @@ function admissionFailure(admission: Exclude<Admission, { kind: "admitted" }>): 
   return apiFailure("RUN_COORDINATION_UNAVAILABLE", "Run coordination is unavailable", 503);
 }
 
-function hasBody(request: Request): boolean {
-  return request.body !== null;
+const BODY_INSPECTION_TIMEOUT_MS = 100;
+
+type BodyRead =
+  | { kind: "chunk"; result: ReadableStreamReadResult<Uint8Array> }
+  | { kind: "error" }
+  | { kind: "timeout" };
+
+async function readBodyChunk(reader: ReadableStreamDefaultReader<Uint8Array>, timeoutMs: number): Promise<BodyRead> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const chunk = reader.read().then(
+    (result): BodyRead => ({ kind: "chunk", result }),
+    (): BodyRead => ({ kind: "error" }),
+  );
+  const timeout = new Promise<BodyRead>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
+  });
+  try {
+    return await Promise.race([chunk, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function hasBody(request: Request): Promise<boolean> {
+  if (request.body === null) return false;
+
+  const reader = request.body.getReader();
+  const deadline = Date.now() + BODY_INSPECTION_TIMEOUT_MS;
+  try {
+    while (true) {
+      const read = await readBodyChunk(reader, deadline - Date.now());
+      if (read.kind !== "chunk") return true;
+      if (read.result.done) return false;
+      if (read.result.value.byteLength > 0) return true;
+    }
+  } catch {
+    return true;
+  } finally {
+    void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
 }
 
 export function createManualRunHandlers(options: ManualRunOptions = {}) {
@@ -44,7 +83,7 @@ export function createManualRunHandlers(options: ManualRunOptions = {}) {
 
   const POST = async (request: Request, params: MonitorParams): Promise<Response> => {
     const invalid = apiPathError(params);
-    if (invalid || new URL(request.url).search || hasBody(request)) return invalid ?? apiFailure("INVALID_REQUEST", "Invalid request", 400);
+    if (invalid || new URL(request.url).search || await hasBody(request)) return invalid ?? apiFailure("INVALID_REQUEST", "Invalid request", 400);
     let monitor: MonitorRecord | null;
     try {
       monitor = await repository.get(params.projectId, params.monitorId);
