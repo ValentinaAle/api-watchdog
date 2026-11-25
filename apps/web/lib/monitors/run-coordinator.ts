@@ -5,6 +5,7 @@ import { createManualRunRedisConnection } from "@api-watchdog/queue";
 export const COORDINATION_OPERATION_TIMEOUT_MS = 2_000;
 
 export type RedisScriptClient = {
+  connect?: () => Promise<void>;
   disconnect?: () => void | Promise<void>;
   eval(script: string, numberOfKeys: number, ...args: string[]): Promise<unknown>;
   time(): Promise<readonly (string | number)[]>;
@@ -19,6 +20,7 @@ export type AdmissionAttempt =
 
 type AdmissionOptions = Readonly<{
   discardClient?: (client: RedisScriptClient) => void;
+  discardPendingClient?: () => void;
   getClient: () => Promise<RedisScriptClient>;
   monotonicNow?: () => number;
   operationTimeoutMs?: number;
@@ -93,12 +95,14 @@ export function createAdmissionExecutor(options: AdmissionOptions) {
         } catch {
           // Closing an uncertain connection must not turn an admission into success.
         }
+      } else {
+        options.discardPendingClient?.();
       }
       return { kind: "unavailable" };
     };
     try {
       client = await waitForReply(options.getClient(), remaining());
-      if (!client || remaining() === 0) return client ? unavailable() : { kind: "unavailable" };
+      if (!client || remaining() === 0) return unavailable();
       const redisNow = serverTimeMs(await waitForReply(client.time(), remaining()));
       if (redisNow === undefined || remaining() === 0) return unavailable();
       const validity: AdmissionValidity = { serverDeadlineMs: redisNow + remaining() };
@@ -126,24 +130,54 @@ export function createProductionAdmissionExecutor(options: ProductionAdmissionOp
   const redisUrl = options.redisUrl ?? process.env.REDIS_URL;
   const createClient = options.createClient ?? createManualRunRedisConnection;
   let client: RedisScriptClient | undefined;
+  let connected = false;
+  let connecting: Promise<RedisScriptClient> | undefined;
 
   return createAdmissionExecutor({
     discardClient: (discardedClient) => {
       if (client !== discardedClient) return;
       client = undefined;
+      connected = false;
+      connecting = undefined;
       try {
         void Promise.resolve(discardedClient.disconnect?.()).catch(() => undefined);
       } catch {
         // The next independent admission still creates a bounded fresh client.
       }
     },
+    discardPendingClient: () => {
+      if (client) {
+        const pendingClient = client;
+        client = undefined;
+        connected = false;
+        connecting = undefined;
+        try {
+          void Promise.resolve(pendingClient.disconnect?.()).catch(() => undefined);
+        } catch {
+          // The next independent admission still creates a bounded fresh client.
+        }
+      }
+    },
     monotonicNow: options.monotonicNow,
     operationTimeoutMs: options.operationTimeoutMs,
     getClient: async () => {
       if (!redisUrl) throw new Error("Redis unavailable");
-      const currentClient = client ?? createClient(redisUrl);
-      client = currentClient;
-      return currentClient;
+      if (client && connected) return client;
+      if (connecting) return connecting;
+      const candidate = client ?? createClient(redisUrl);
+      client = candidate;
+      const pending = (async () => {
+        await candidate.connect?.();
+        if (client !== candidate) throw new Error("Redis client discarded");
+        connected = true;
+        return candidate;
+      })();
+      connecting = pending;
+      try {
+        return await pending;
+      } finally {
+        if (connecting === pending) connecting = undefined;
+      }
     },
   });
 }

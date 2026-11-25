@@ -16,6 +16,7 @@ export const MANUAL_RUN_REDIS_OPTIONS: Readonly<RedisOptions> = {
   commandTimeout: 2_000,
   connectTimeout: 2_000,
   enableOfflineQueue: false,
+  lazyConnect: true,
   maxRetriesPerRequest: 0,
   retryStrategy: () => null,
   socketTimeout: 2_000,
