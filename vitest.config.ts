@@ -3,5 +3,6 @@ import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   resolve: { alias: { "@api-watchdog/validation": fileURLToPath(new URL("./packages/validation/src/index.ts", import.meta.url)) } },
+  ssr: { resolve: { conditions: ["react-server"] } },
   test: { include: ["tests/unit/**/*.test.ts"], environment: "node" },
 });
