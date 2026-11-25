@@ -1,10 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { projectMonitorEditPath, projectMonitorsPath } from "../../lib/projects/paths";
 import { useProjectId } from "../projects/project-context";
-import { formatDate, formatInterval, monitorActionApiPath, monitorApiPath, readApiError, type Monitor } from "./types";
+import {
+  createManualRunClient,
+  formatDate,
+  formatInterval,
+  manualRunOutcomeMessage,
+  monitorActionApiPath,
+  monitorApiPath,
+  readApiError,
+  type ManualRunState,
+  type Monitor,
+} from "./types";
 
 export function MonitorDetail({ projectId: suppliedProjectId, monitorId }: { projectId?: string; monitorId: string }) {
   const contextProjectId = useProjectId();
@@ -18,6 +28,8 @@ export function MonitorDetail({ projectId: suppliedProjectId, monitorId }: { pro
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [runState, setRunState] = useState<ManualRunState>({ pending: false });
+  const runClientRef = useRef<ReturnType<typeof createManualRunClient> | null>(null);
   const base = projectMonitorsPath(projectId);
 
   const load = useCallback(async () => {
@@ -42,6 +54,17 @@ export function MonitorDetail({ projectId: suppliedProjectId, monitorId }: { pro
   }, [projectId, monitorId]);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    const client = createManualRunClient({ projectId, monitorId, fetcher: (...args) => fetch(...args), onStateChange: setRunState });
+    runClientRef.current = client;
+    setRunState({ pending: false });
+    return () => {
+      // This abort prevents stale client UI updates; it cannot confirm server-side cancellation.
+      client.dispose();
+      if (runClientRef.current === client) runClientRef.current = null;
+    };
+  }, [projectId, monitorId]);
 
   async function changeStatus() {
     if (!monitor) return;
@@ -92,11 +115,16 @@ export function MonitorDetail({ projectId: suppliedProjectId, monitorId }: { pro
     {loading ? <div role="status" className="rounded-xl border border-slate-700 bg-slate-900/70 p-5 text-slate-300">Loading monitor…</div> : null}
     {!loading && error && !monitor ? <section role="alert" className="rounded-2xl border border-slate-700 bg-slate-900/70 p-6"><h1 className="text-xl font-semibold text-slate-50">Monitor unavailable</h1><p className="mt-2 text-sm text-slate-300">{error}</p><div className="mt-5 flex gap-3"><button onClick={() => void load()} className="rounded-lg border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">Try again</button><a className="rounded-lg px-4 py-2 text-sm font-semibold text-cyan-200 hover:bg-cyan-200/10" href={base}>Back to monitors</a></div></section> : null}
     {monitor ? <>
-      <section className="rounded-2xl border border-cyan-300/20 bg-gradient-to-br from-cyan-300/10 to-slate-900/80 p-5 sm:p-8"><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="font-mono text-xs uppercase tracking-[0.18em] text-cyan-200">MONITOR STATUS</p><h1 className="mt-3 break-words text-3xl font-semibold text-slate-50">{monitor.name}</h1></div><span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-bold uppercase tracking-wide ${monitor.status === "active" ? "bg-emerald-400/10 text-emerald-200" : "bg-slate-500/20 text-slate-300"}`}><span aria-hidden="true" className={`h-2 w-2 rounded-full ${monitor.status === "active" ? "bg-emerald-300" : "bg-slate-400"}`} />{monitor.status}</span></div><p className="mt-5 break-all font-mono text-sm leading-6 text-slate-300">{monitor.method} <span className="text-cyan-100">{monitor.url}</span></p><div className="mt-6 flex flex-col gap-3 sm:flex-row"><button onClick={() => void changeStatus()} disabled={busy} className="min-h-11 rounded-lg bg-cyan-300 px-5 py-3 text-sm font-bold text-slate-950 hover:bg-cyan-200 disabled:opacity-60">{busy ? "Saving…" : monitor.status === "active" ? "Pause monitor" : "Resume monitor"}</button><button onClick={() => setConfirmDelete(true)} disabled={busy} className="min-h-11 rounded-lg border border-rose-300/40 px-5 py-3 text-sm font-semibold text-rose-200 hover:bg-rose-300/10 disabled:opacity-60">Delete</button></div></section>
+      <section className="rounded-2xl border border-cyan-300/20 bg-gradient-to-br from-cyan-300/10 to-slate-900/80 p-5 sm:p-8"><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="font-mono text-xs uppercase tracking-[0.18em] text-cyan-200">MONITOR STATUS</p><h1 className="mt-3 break-words text-3xl font-semibold text-slate-50">{monitor.name}</h1></div><span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-bold uppercase tracking-wide ${monitor.status === "active" ? "bg-emerald-400/10 text-emerald-200" : "bg-slate-500/20 text-slate-300"}`}><span aria-hidden="true" className={`h-2 w-2 rounded-full ${monitor.status === "active" ? "bg-emerald-300" : "bg-slate-400"}`} />{monitor.status}</span></div><p className="mt-5 break-all font-mono text-sm leading-6 text-slate-300">{monitor.method} <span className="text-cyan-100">{monitor.url}</span></p><div className="mt-6 flex flex-col gap-3 sm:flex-row"><button onClick={() => void runClientRef.current?.run()} disabled={runState.pending} aria-describedby="run-now-status" className="min-h-11 rounded-lg border border-emerald-300/50 px-5 py-3 text-sm font-bold text-emerald-100 hover:bg-emerald-300/10 disabled:cursor-wait disabled:opacity-60">{runState.pending ? "Running…" : "Run Now"}</button><button onClick={() => void changeStatus()} disabled={busy} className="min-h-11 rounded-lg bg-cyan-300 px-5 py-3 text-sm font-bold text-slate-950 hover:bg-cyan-200 disabled:opacity-60">{busy ? "Saving…" : monitor.status === "active" ? "Pause monitor" : "Resume monitor"}</button><button onClick={() => setConfirmDelete(true)} disabled={busy} className="min-h-11 rounded-lg border border-rose-300/40 px-5 py-3 text-sm font-semibold text-rose-200 hover:bg-rose-300/10 disabled:opacity-60">Delete</button></div></section>
+      <section id="run-now-status" className="mt-4" aria-live="polite" aria-atomic="true">
+        {runState.pending ? <p role="status" className="rounded-lg border border-cyan-300/20 bg-cyan-300/5 p-3 text-sm text-cyan-100">Running this monitor now…</p> : null}
+        {runState.result ? <div role="status" className={`rounded-lg border p-3 text-sm ${runState.result.outcome === "success" ? "border-emerald-300/20 bg-emerald-300/5 text-emerald-100" : "border-amber-300/20 bg-amber-300/5 text-amber-100"}`}><p className="font-semibold">{manualRunOutcomeMessage(runState.result.outcome)}</p><p className="mt-1 text-xs">{runState.result.latencyMs.toLocaleString()} ms{runState.result.statusCode ? ` · HTTP ${runState.result.statusCode}` : ""}</p></div> : null}
+        {runState.error ? <p role="alert" className="rounded-lg border border-rose-300/30 bg-rose-950/30 p-3 text-sm text-rose-100">{runState.error}</p> : null}
+      </section>
       {notice ? <p role="status" className="mt-4 rounded-lg border border-emerald-300/20 bg-emerald-300/5 p-3 text-sm text-emerald-200">{notice}</p> : null}
       {error ? <p role="alert" className="mt-4 rounded-lg border border-rose-300/30 bg-rose-950/30 p-3 text-sm text-rose-100">{error}</p> : null}
       <section className="mt-6 rounded-2xl border border-slate-700/80 bg-slate-900/70 p-5 sm:p-7"><h2 className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">Request configuration</h2><dl className="mt-5 grid gap-x-8 gap-y-5 sm:grid-cols-2"><div><dt className="text-xs text-slate-500">HTTP method</dt><dd className="mt-1 font-mono text-sm text-slate-100">{monitor.method}</dd></div><div><dt className="text-xs text-slate-500">Expected status</dt><dd className="mt-1 font-mono text-sm text-slate-100">{monitor.expectedStatus}</dd></div><div><dt className="text-xs text-slate-500">Interval</dt><dd className="mt-1 text-sm text-slate-100">{formatInterval(monitor.intervalSeconds)}</dd></div><div><dt className="text-xs text-slate-500">Timeout</dt><dd className="mt-1 text-sm text-slate-100">{monitor.timeoutMs.toLocaleString()} ms</dd></div><div><dt className="text-xs text-slate-500">Created</dt><dd className="mt-1 text-sm text-slate-100">{formatDate(monitor.createdAt)}</dd></div><div><dt className="text-xs text-slate-500">Last updated</dt><dd className="mt-1 text-sm text-slate-100">{formatDate(monitor.updatedAt)}</dd></div></dl></section>
-      <p className="mt-5 text-xs leading-5 text-slate-500">This page manages saved configuration only. It does not run a check or display monitoring history.</p>
+      <p className="mt-5 text-xs leading-5 text-slate-500">Run Now executes a transient manual check. Results are not saved as monitoring history.</p>
     </> : null}
     {confirmDelete && monitor ? <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="presentation"><section aria-labelledby="delete-title" aria-describedby="delete-description" aria-modal="true" className="w-full max-w-md rounded-2xl border border-rose-300/30 bg-slate-900 p-6 shadow-2xl" role="alertdialog"><p className="font-mono text-xs font-bold uppercase tracking-[0.18em] text-rose-200">Permanent action</p><h2 id="delete-title" className="mt-3 text-xl font-semibold text-slate-50">Delete {monitor.name}?</h2><p id="delete-description" className="mt-3 text-sm leading-6 text-slate-300">This permanently removes this monitor configuration. This action cannot be undone.</p><div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end"><button autoFocus onClick={() => setConfirmDelete(false)} disabled={busy} className="min-h-11 rounded-lg border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">Cancel</button><button onClick={() => void deleteMonitor()} disabled={busy} className="min-h-11 rounded-lg bg-rose-400 px-4 py-2 text-sm font-bold text-slate-950 hover:bg-rose-300 disabled:opacity-60">{busy ? "Deleting…" : "Delete monitor"}</button></div></section></div> : null}
   </div>;
