@@ -333,3 +333,21 @@ describe("http check engine", () => {
     }
   });
 });
+
+describe("server cancellation", () => {
+  it("uses a pre-aborted server signal without resolving or connecting", async () => {
+    const controller = new AbortController(); controller.abort();
+    const testResolver = resolver(); const testTransport = transport();
+    await expect(executeCheck(input, { resolver: testResolver, transport: testTransport, signal: controller.signal })).resolves.toMatchObject({ outcome: "timeout" });
+    expect(testResolver.resolve4).not.toHaveBeenCalled(); expect(testTransport.execute).not.toHaveBeenCalled();
+  });
+
+  it("aborts an active transport through the existing deadline signal and removes the server listener", async () => {
+    const controller = new AbortController(); let received: AbortSignal | undefined;
+    const pending = { execute: vi.fn(({ signal }: { signal: AbortSignal }) => new Promise<{ statusCode: number }>((_resolve, reject) => { received = signal; signal.addEventListener("abort", () => reject(new Error("secret")), { once: true }); })) };
+    const run = executeCheck(input, { resolver: resolver(), transport: pending, signal: controller.signal });
+    await vi.waitFor(() => expect(pending.execute).toHaveBeenCalledTimes(1));
+    controller.abort();
+    await expect(run).resolves.toMatchObject({ outcome: "timeout" }); expect(received?.aborted).toBe(true);
+  });
+});

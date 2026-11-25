@@ -48,6 +48,8 @@ export type CheckDependencies = Readonly<{
   resolver: MonitorDnsResolver;
   transport: ConstrainedTransport;
   clock?: CheckClock;
+  /** Server-only cancellation; not monitor configuration or a public result field. */
+  signal?: AbortSignal;
 }>;
 
 export class CheckTransportError extends Error {

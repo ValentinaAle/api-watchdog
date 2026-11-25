@@ -32,7 +32,10 @@ function isValidInput(input: CheckInput): boolean {
 }
 
 function awaitBeforeDeadline<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(new DeadlineExceededError());
+  if (signal.aborted) {
+    void promise.catch(() => undefined);
+    return Promise.reject(new DeadlineExceededError());
+  }
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(new DeadlineExceededError());
     signal.addEventListener("abort", onAbort, { once: true });
@@ -64,6 +67,9 @@ export async function executeCheck(input: CheckInput, dependencies: CheckDepende
 
   const timeoutMs = Math.min(input.timeoutMs, MAX_EXECUTION_TIMEOUT_MS);
   const controller = new AbortController();
+  const onExternalAbort = () => controller.abort();
+  if (dependencies.signal?.aborted) controller.abort();
+  else dependencies.signal?.addEventListener("abort", onExternalAbort, { once: true });
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
@@ -92,5 +98,6 @@ export async function executeCheck(input: CheckInput, dependencies: CheckDepende
     return result(mapFailure(error), startedAt, now);
   } finally {
     clearTimeout(timer);
+    dependencies.signal?.removeEventListener("abort", onExternalAbort);
   }
 }
