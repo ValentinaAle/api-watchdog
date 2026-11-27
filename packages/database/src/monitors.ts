@@ -14,6 +14,21 @@ export type MonitorInput = {
 
 export type MonitorUpdate = Partial<Omit<MonitorInput, "projectId">>;
 
+const scheduleFields = [
+  "url",
+  "method",
+  "intervalSeconds",
+  "timeoutMs",
+  "expectedStatus",
+  "status",
+] as const;
+
+const maxUpdateAttempts = 5;
+
+function changesSchedule(current: Monitor, input: MonitorUpdate): boolean {
+  return scheduleFields.some((field) => input[field] !== undefined && input[field] !== current[field]);
+}
+
 export function createMonitor(input: MonitorInput): Promise<Monitor> {
   const { projectId, ...data } = input;
   return prisma.monitor.create({ data: { ...data, project: { connect: { id: projectId } } } });
@@ -35,14 +50,25 @@ export async function updateMonitor(
   monitorId: string,
   input: MonitorUpdate,
 ): Promise<Monitor | null> {
-  const data: Prisma.MonitorUpdateManyMutationInput = input;
-  const result = await prisma.monitor.updateMany({
-    where: { id: monitorId, projectId },
-    data,
-  });
+  for (let attempt = 0; attempt < maxUpdateAttempts; attempt += 1) {
+    const current = await getMonitor(projectId, monitorId);
+    if (!current) return null;
 
-  if (result.count === 0) return null;
-  return getMonitor(projectId, monitorId);
+    const updatesSchedule = changesSchedule(current, input);
+    const data: Prisma.MonitorUpdateManyMutationInput = updatesSchedule
+      ? { ...input, scheduleVersion: { increment: 1 } }
+      : input;
+    const result = await prisma.monitor.updateMany({
+      where: updatesSchedule
+        ? { id: monitorId, projectId, scheduleVersion: current.scheduleVersion }
+        : { id: monitorId, projectId },
+      data,
+    });
+
+    if (result.count > 0) return getMonitor(projectId, monitorId);
+  }
+
+  throw new Error("Monitor update contention");
 }
 
 export async function deleteMonitor(projectId: string, monitorId: string): Promise<boolean> {
