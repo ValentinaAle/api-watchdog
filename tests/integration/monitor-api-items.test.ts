@@ -162,3 +162,25 @@ describe("project-scoped monitor item and action API", () => {
     expect(testFetch).not.toHaveBeenCalled();
   });
 });
+
+describe("scheduleVersion API boundary", () => {
+  afterAll(async () => {
+    await cleanProjects().catch(() => undefined);
+  });
+
+  it("rejects a client-supplied scheduleVersion without changing the monitor", async () => {
+    const projectId = await makeProject("api-schedule-version");
+    const created = await api.collection.POST(new Request("http://localhost", {
+      method: "POST", body: JSON.stringify(input()), headers: { "content-type": "application/json" },
+    }), { projectId });
+    const monitor = (await json(created)).data;
+
+    const response = await api.item.PATCH(new Request("http://localhost", {
+      method: "PATCH", body: JSON.stringify({ scheduleVersion: 999 }), headers: { "content-type": "application/json" },
+    }), { projectId, monitorId: monitor.id });
+
+    expect(response.status).toBe(400);
+    expect((await json(response)).error.code).toBe("INVALID_REQUEST");
+    expect((await json(await api.item.GET(new Request("http://localhost"), { projectId, monitorId: monitor.id }))).data.intervalSeconds).toBe(60);
+  });
+});
